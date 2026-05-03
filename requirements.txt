@@ -1,0 +1,11 @@
+yfinance>=0.2.40
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.11.0
+dash>=2.16.0
+dash-bootstrap-components>=1.5.0
+plotly>=5.18.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+ib_insync>=0.9.86
+gunicorn>=21.2.0
