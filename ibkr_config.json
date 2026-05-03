@@ -1,0 +1,101 @@
+{
+  "_doc": {
+    "overview": "Interactive Brokers API configuration for real-time options implied-volatility data.",
+    "requirements": [
+      "1. Install TWS (Trader Workstation) or IB Gateway from https://www.interactivebrokers.com/en/trading/tws.php",
+      "2. In TWS: Edit → Global Configuration → API → Settings",
+      "     ✅ Enable ActiveX and Socket Clients",
+      "     ✅ Add 127.0.0.1 to Trusted IP Addresses",
+      "     ✅ Read-Only API (tick this for safety — we only read data)",
+      "     Set Socket port to match the 'port' value below",
+      "3. Set 'enabled': true and run:  python ibkr_options_crawler.py"
+    ],
+    "port_guide": {
+      "TWS_Live_Trading":    7496,
+      "TWS_Paper_Trading":   7497,
+      "IB_Gateway_Live":     4001,
+      "IB_Gateway_Paper":    4002
+    },
+    "client_id_note": "Each simultaneous API connection needs a unique client_id (1–999). Use 10 unless you have other bots connecting.",
+    "paper_trading_note": "Strongly recommended: use paper trading port (7497 / 4002) for data-only work. Live and paper return identical market data."
+  },
+
+  "enabled": false,
+
+  "connection": {
+    "host":             "127.0.0.1",
+    "port":             7497,
+    "client_id":        10,
+    "timeout_seconds":  30,
+    "readonly":         true
+  },
+
+  "crawl_settings": {
+    "history_duration":          "1 Y",
+    "bar_size":                  "1 day",
+    "use_rth":                   true,
+    "delay_between_requests_s":  1.5,
+    "max_retries":               2,
+    "iv_windows": {
+      "_doc": "Rolling window sizes (trading days) for IV averages",
+      "1_month":    21,
+      "1_quarter":  63,
+      "6_months":  126,
+      "1_year":    252
+    }
+  },
+
+  "ticker_contracts": {
+    "_doc": "IBKR contract specification per display-name ticker. 'auto' = infer from TICKER_TYPES in config.py.",
+
+    "SOXL":       { "type": "STK",    "symbol": "SOXL",  "exchange": "SMART",    "currency": "USD" },
+    "SOXS":       { "type": "STK",    "symbol": "SOXS",  "exchange": "SMART",    "currency": "USD" },
+    "SMH":        { "type": "STK",    "symbol": "SMH",   "exchange": "SMART",    "currency": "USD" },
+    "TQQQ":       { "type": "STK",    "symbol": "TQQQ",  "exchange": "SMART",    "currency": "USD" },
+    "VIX":        { "type": "IND",    "symbol": "VIX",   "exchange": "CBOE",     "currency": "USD",
+                    "_note": "VIX index — IV fetched via OPTION_IMPLIED_VOLATILITY on the index itself" },
+    "A50":        { "type": "STK",    "symbol": "ASHR",  "exchange": "SMART",    "currency": "USD",
+                    "_note": "ASHR ETF used as FTSE China A50 proxy" },
+    "USD":        { "type": "STK",    "symbol": "UUP",   "exchange": "SMART",    "currency": "USD",
+                    "_note": "UUP (Invesco DB USD Index) used as DXY proxy" },
+
+    "AMD":        { "type": "STK",    "symbol": "AMD",   "exchange": "SMART",    "currency": "USD" },
+    "AVGO":       { "type": "STK",    "symbol": "AVGO",  "exchange": "SMART",    "currency": "USD" },
+    "ASML":       { "type": "STK",    "symbol": "ASML",  "exchange": "SMART",    "currency": "USD" },
+    "NVDA":       { "type": "STK",    "symbol": "NVDA",  "exchange": "SMART",    "currency": "USD" },
+    "QCOM":       { "type": "STK",    "symbol": "QCOM",  "exchange": "SMART",    "currency": "USD" },
+    "MU":         { "type": "STK",    "symbol": "MU",    "exchange": "SMART",    "currency": "USD" },
+    "ARM":        { "type": "STK",    "symbol": "ARM",   "exchange": "SMART",    "currency": "USD" },
+    "LRCX":       { "type": "STK",    "symbol": "LRCX",  "exchange": "SMART",    "currency": "USD" },
+    "AMAT":       { "type": "STK",    "symbol": "AMAT",  "exchange": "SMART",    "currency": "USD" },
+    "MRVL":       { "type": "STK",    "symbol": "MRVL",  "exchange": "SMART",    "currency": "USD" },
+    "TSM":        { "type": "STK",    "symbol": "TSM",   "exchange": "SMART",    "currency": "USD" },
+    "TXN":        { "type": "STK",    "symbol": "TXN",   "exchange": "SMART",    "currency": "USD" },
+    "NXPI":       { "type": "STK",    "symbol": "NXPI",  "exchange": "SMART",    "currency": "USD" },
+    "INTC":       { "type": "STK",    "symbol": "INTC",  "exchange": "SMART",    "currency": "USD" },
+    "BRK.A":      { "type": "STK",    "symbol": "BRK A", "exchange": "SMART",    "currency": "USD",
+                    "_note": "BRK.A uses a space, not a dot, in the IBKR symbol" },
+    "ORCL":       { "type": "STK",    "symbol": "ORCL",  "exchange": "SMART",    "currency": "USD" },
+    "MSFT":       { "type": "STK",    "symbol": "MSFT",  "exchange": "SMART",    "currency": "USD" },
+    "GOOG":       { "type": "STK",    "symbol": "GOOG",  "exchange": "SMART",    "currency": "USD" },
+    "META":       { "type": "STK",    "symbol": "META",  "exchange": "SMART",    "currency": "USD" },
+    "AAPL":       { "type": "STK",    "symbol": "AAPL",  "exchange": "SMART",    "currency": "USD" },
+    "TSLA":       { "type": "STK",    "symbol": "TSLA",  "exchange": "SMART",    "currency": "USD" },
+    "AMZN":       { "type": "STK",    "symbol": "AMZN",  "exchange": "SMART",    "currency": "USD" },
+
+    "Gold":       { "type": "STK",    "symbol": "GLD",   "exchange": "SMART",    "currency": "USD",
+                    "_note": "GLD ETF used as Gold proxy; options IV on GLD futures is available but requires a futures subscription" },
+    "10YTreasury":{ "type": "STK",    "symbol": "TLT",   "exchange": "SMART",    "currency": "USD",
+                    "_note": "iShares 20+ Year Treasury ETF (TLT) used as 10Y proxy" },
+
+    "BTC":        { "type": "CRYPTO", "symbol": "BTC",   "exchange": "PAXOS",    "currency": "USD",
+                    "_note": "Requires IBKR crypto subscription. IV may not be available." },
+    "ETH":        { "type": "CRYPTO", "symbol": "ETH",   "exchange": "PAXOS",    "currency": "USD",
+                    "_note": "Requires IBKR crypto subscription. IV may not be available." }
+  },
+
+  "skip_tickers": {
+    "_doc": "Tickers in this list are silently skipped (no IBKR contract available or IV not meaningful).",
+    "list": []
+  }
+}
