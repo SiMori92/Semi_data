@@ -220,11 +220,29 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
             html.Div([
                 html.Span("Last crawl: ", style={"color": SUBTEXT, "fontSize": "12px"}),
                 html.Span(id="last-crawl-time", style={"color": ACCENT, "fontSize": "12px"}),
+                # ── Reload confirmation stamp (updates on every manual refresh) ─
+                html.Span(id="reload-stamp", style={
+                    "color": GREEN, "fontSize": "11px", "marginLeft": "12px",
+                    "opacity": "0.8",
+                }),
                 # ── IBKR connection badge ──────────────────────────────────
                 html.Span(id="ibkr-status-badge", style={"marginLeft": "20px"}),
-                dbc.Button("🔄 Refresh Data", id="btn-refresh", color="primary",
-                           size="sm", style={"marginLeft": "16px", "fontSize": "12px"}),
-            ], style={"display": "flex", "alignItems": "center"}),
+                dbc.Button("🔄 Reload Charts", id="btn-refresh", color="primary",
+                           size="sm", style={"marginLeft": "16px", "fontSize": "12px"},
+                           title="Re-read data from the database and redraw all charts"),
+                dbc.Button("⚡ Run Crawl", id="btn-run-crawl", color="warning",
+                           size="sm", style={"marginLeft": "8px", "fontSize": "12px"},
+                           title="Fetch fresh market data from Yahoo Finance (takes ~2 min)"),
+            ], style={"display": "flex", "alignItems": "center", "gap": "0"}),
+            # ── Run-crawl status toast ────────────────────────────────────────
+            dbc.Toast(
+                id="crawl-toast",
+                header="Crawl Status",
+                is_open=False,
+                dismissable=True,
+                icon="success",
+                style={"position": "fixed", "top": 66, "right": 16, "width": 320, "zIndex": 9999},
+            ),
         ]),
         color=BG2, dark=True,
         style={"borderBottom": f"1px solid #30363d", "padding": "10px 20px"}
@@ -300,6 +318,8 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
 
     # Interval for auto-refresh status
     dcc.Interval(id="status-interval", interval=30_000, n_intervals=0),
+    # Store for crawl-job state (polled by status-interval)
+    dcc.Store(id="crawl-job-store", data={"running": False, "message": ""}),
 ])
 
 
@@ -352,6 +372,60 @@ def select_clear_all(select_clicks, clear_clicks):
 )
 def update_crawl_time(*_):
     return last_crawl_time()
+
+
+@app.callback(
+    Output("reload-stamp", "children"),
+    Input("btn-refresh", "n_clicks"),
+    prevent_initial_call=True,
+)
+def show_reload_stamp(_):
+    """Show 'Reloaded HH:MM UTC' next to Last Crawl after each manual refresh."""
+    return f"✓ Reloaded {datetime.utcnow().strftime('%H:%M')} UTC"
+
+
+@app.callback(
+    Output("crawl-toast",     "children"),
+    Output("crawl-toast",     "is_open"),
+    Output("crawl-toast",     "icon"),
+    Output("last-crawl-time", "children", allow_duplicate=True),
+    Input("btn-run-crawl",    "n_clicks"),
+    prevent_initial_call=True,
+)
+def trigger_crawl(_):
+    """Start a background crawl and notify the user."""
+    import threading, subprocess, sys, os as _os
+    from dash import no_update
+
+    # Check if already running
+    if _crawl_running.get("active"):
+        return "Crawl already in progress — please wait.", True, "warning", no_update
+
+    def _run_crawl():
+        _crawl_running["active"] = True
+        try:
+            script_dir = _os.path.dirname(_os.path.abspath(__file__))
+            py = sys.executable
+            subprocess.run([py, _os.path.join(script_dir, "crawler.py"), "--quick"],
+                           timeout=360, cwd=script_dir)
+            subprocess.run([py, _os.path.join(script_dir, "supply_chain_crawler.py")],
+                           timeout=360, cwd=script_dir)
+        except Exception:
+            pass
+        finally:
+            _crawl_running["active"] = False
+
+    threading.Thread(target=_run_crawl, daemon=True).start()
+    return (
+        "Crawl started — prices & supply-chain data refreshing (~2 min). "
+        "Last Crawl timestamp will update when complete.",
+        True, "primary",
+        last_crawl_time(),
+    )
+
+
+# Module-level dict to track crawl state across gunicorn requests
+_crawl_running: dict = {"active": False}
 
 
 @app.callback(
@@ -410,19 +484,31 @@ def render_tab(active_tab, tickers, start_date, end_date, _refresh):
     start = start_date[:10] if start_date else "2023-01-01"
     end   = end_date[:10]   if end_date   else datetime.today().strftime("%Y-%m-%d")
 
-    if active_tab == "tab-overview":
-        return tab_overview(tickers, start, end)
-    elif active_tab == "tab-financials":
-        return tab_financials(tickers)
-    elif active_tab == "tab-sentiment":
-        return tab_sentiment(tickers)
-    elif active_tab == "tab-cycles":
-        return tab_cycles(tickers)
-    elif active_tab == "tab-compare":
-        return tab_compare(tickers)
-    elif active_tab == "tab-supplychain":
-        return tab_supply_chain()
-    return html.Div("Select a tab.")
+    _TAB_MAP = {
+        "tab-overview":     lambda: tab_overview(tickers, start, end),
+        "tab-financials":   lambda: tab_financials(tickers),
+        "tab-sentiment":    lambda: tab_sentiment(tickers),
+        "tab-cycles":       lambda: tab_cycles(tickers),
+        "tab-compare":      lambda: tab_compare(tickers),
+        "tab-supplychain":  lambda: tab_supply_chain(),
+    }
+
+    fn = _TAB_MAP.get(active_tab)
+    if fn is None:
+        return html.Div("Select a tab.")
+
+    try:
+        return fn()
+    except Exception as exc:
+        import traceback
+        tb = traceback.format_exc()
+        return _card([
+            _section_title("⚠️ Tab Error"),
+            html.P(f"{type(exc).__name__}: {exc}",
+                   style={"color": RED, "fontWeight": "600", "marginBottom": "8px"}),
+            html.Pre(tb, style={"color": SUBTEXT, "fontSize": "11px",
+                                "overflowX": "auto", "whiteSpace": "pre-wrap"}),
+        ])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1195,29 +1281,39 @@ def sc_steam_query() -> pd.DataFrame:
 
 def tab_supply_chain():
     """
-    Supply Chain tab — six panels covering the six schema metrics
-    for GPU, CPU, and RAM:
-      1. Price Index          (PassMark + Newegg history)
-      2. Sales Volume         (Steam HW Survey market share)
-      3. Order Volume         (SEMI NA Equipment Book-to-Bill)
-      4. Manufacturer Capacity (fab capacity from earnings)
-      5. Manufacturer Occupancy (fab utilisation %)
-      6. Estimated Delivery   (Newegg in-stock status)
+    Supply Chain tab — category sub-tabs (GPU / CPU / RAM) using dbc.Tabs
+    with content pre-rendered directly in each tab child (no server callback
+    needed — Dash handles show/hide via CSS). This avoids the Dash anti-pattern
+    of having a callback output nested inside another callback's output.
     """
 
-    # ── Category radio ───────────────────────────────────────────────────────
-    cat_selector = dbc.RadioItems(
-        id="sc-category",
-        options=[
-            {"label": "🖥️  GPU",    "value": "GPU"},
-            {"label": "⚙️  CPU",    "value": "CPU"},
-            {"label": "💾  RAM",    "value": "RAM"},
-            {"label": "All",        "value": "ALL"},
+    _TAB_STYLE = {"--bs-nav-tabs-border-color": "#30363d"}
+
+    def _safe_price_section(cat):
+        try:
+            return _sc_price_section(cat)
+        except Exception as exc:
+            return _card(html.P(
+                f"Error loading {cat} price data: {exc}",
+                style={"color": RED, "fontSize": "13px"},
+            ))
+
+    # dbc.Tabs renders tab content directly — no server round-trip required.
+    # All three sections are built once when the Supply Chain tab is opened.
+    price_tabs = dbc.Tabs(
+        [
+            dbc.Tab(_safe_price_section("GPU"), label="🖥️  GPU", tab_id="sc-tab-gpu",
+                    label_style={"fontSize": "13px", "color": TEXT},
+                    active_label_style={"color": ACCENT, "fontWeight": "600"}),
+            dbc.Tab(_safe_price_section("CPU"), label="⚙️  CPU", tab_id="sc-tab-cpu",
+                    label_style={"fontSize": "13px", "color": TEXT},
+                    active_label_style={"color": ACCENT, "fontWeight": "600"}),
+            dbc.Tab(_safe_price_section("RAM"), label="💾  RAM", tab_id="sc-tab-ram",
+                    label_style={"fontSize": "13px", "color": TEXT},
+                    active_label_style={"color": ACCENT, "fontWeight": "600"}),
         ],
-        value="GPU",
-        inline=True,
-        inputStyle={"marginRight": "4px", "accentColor": ACCENT},
-        labelStyle={"marginRight": "20px", "color": TEXT, "fontSize": "13px"},
+        active_tab="sc-tab-gpu",
+        style=_TAB_STYLE,
     )
 
     return html.Div([
@@ -1232,13 +1328,8 @@ def tab_supply_chain():
             ),
         ]),
 
-        # ── Category selector ────────────────────────────────────────────────
-        _card([_section_title("Product Category"), cat_selector]),
-
-        # ── PANEL 1 + 2: Price Index & In-Stock ─────────────────────────────
-        # Pre-render GPU panel so the tab is not blank on first load.
-        # The update_sc_price_panel callback updates this when the radio changes.
-        html.Div(id="sc-price-panel", children=_sc_price_section("GPU")),
+        # ── PANEL 1 + 2: Price Index & In-Stock (GPU / CPU / RAM sub-tabs) ───
+        _card([_section_title("Product Category — Price Index & Availability"), price_tabs]),
 
         # ── PANEL 3: Sales Volume — Steam Survey ─────────────────────────────
         _sc_steam_panel(),
@@ -1251,26 +1342,7 @@ def tab_supply_chain():
 
         # ── PANEL 7: DRAM Spot Price ──────────────────────────────────────────
         _sc_dram_panel(),
-
-        dcc.Store(id="sc-cat-store", data="GPU"),
     ])
-
-
-# ── Callback: update price panel when category changes ───────────────────────
-@app.callback(
-    Output("sc-price-panel", "children"),
-    Input("sc-category", "value"),
-)
-def update_sc_price_panel(category):
-    if category == "ALL":
-        cats = ["GPU", "CPU", "RAM"]
-    else:
-        cats = [category]
-
-    panels = []
-    for cat in cats:
-        panels.append(_sc_price_section(cat))
-    return html.Div(panels)
 
 
 def _sc_price_section(category: str):
@@ -1851,6 +1923,45 @@ def upload_iv():
         return jsonify({"error": str(e)}), 500
 
     return jsonify({"status": "ok", "stored": len(snapshots)}), 200
+
+
+@server.route("/api/db-stats")
+def db_stats():
+    """Return row counts for all key tables — useful for monitoring crawl health."""
+    auth = flask_request.headers.get("X-API-Key", "")
+    if _RELAY_API_KEY and not hmac.compare_digest(auth, _RELAY_API_KEY):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    tables = [
+        "daily_prices", "quarterly_financials", "market_sentiment",
+        "cycle_analysis", "company_info", "crawl_runs",
+        "sc_prices", "sc_market_share", "sc_semi_btb",
+        "sc_dram_spot", "sc_capacity", "options_iv",
+    ]
+    stats = {}
+    try:
+        conn = get_conn()
+        for t in tables:
+            try:
+                stats[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            except Exception:
+                stats[t] = "table missing"
+        # Last crawl info
+        try:
+            row = conn.execute(
+                "SELECT started_at, finished_at, status, tickers_ok "
+                "FROM crawl_runs ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            stats["last_crawl"] = dict(zip(
+                ["started_at", "finished_at", "status", "tickers_ok"], row
+            )) if row else None
+        except Exception:
+            stats["last_crawl"] = None
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify(stats), 200
 
 
 # ══════════════════════════════════════════════════════════════════════════════
