@@ -289,7 +289,12 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
             ], style={"marginBottom": "16px",
                       "--bs-nav-tabs-border-color": "#30363d"}),
 
-            html.Div(id="tab-content"),
+            dcc.Loading(
+                id="tab-loading",
+                type="circle",
+                color=ACCENT,
+                children=html.Div(id="tab-content"),
+            ),
         ]),
     ]),
 
@@ -316,6 +321,28 @@ def sync_tickers(semi, etfs, macro, tech):
         if lst:
             result.extend(lst)
     return result
+
+
+@app.callback(
+    Output("chk-semi-companies", "value"),
+    Output("chk-semi-etfs",      "value"),
+    Output("chk-macro--other",   "value"),
+    Output("chk-tech--mixed",    "value"),
+    Input("btn-select-all",      "n_clicks"),
+    Input("btn-clear-all",       "n_clicks"),
+    prevent_initial_call=True,
+)
+def select_clear_all(select_clicks, clear_clicks):
+    from dash import ctx
+    if ctx.triggered_id == "btn-select-all":
+        return (
+            SEMI_COMPANIES,
+            SEMI_ETFS,
+            ["TQQQ", "VIX", "USD", "10YTreasury", "Gold", "BTC", "ETH"],
+            ["MSFT", "GOOG", "META", "AAPL", "TSLA", "AMZN", "ORCL", "BRK.A"],
+        )
+    # Clear All
+    return [], [], [], []
 
 
 @app.callback(
@@ -374,8 +401,9 @@ def update_ibkr_badge(_):
     Input("selected-tickers", "data"),
     Input("date-range",       "start_date"),
     Input("date-range",       "end_date"),
+    Input("btn-refresh",      "n_clicks"),
 )
-def render_tab(active_tab, tickers, start_date, end_date):
+def render_tab(active_tab, tickers, start_date, end_date, _refresh):
     if not tickers:
         return _card(html.P("Select at least one ticker from the sidebar.", style={"color": SUBTEXT}))
 
@@ -1208,7 +1236,9 @@ def tab_supply_chain():
         _card([_section_title("Product Category"), cat_selector]),
 
         # ── PANEL 1 + 2: Price Index & In-Stock ─────────────────────────────
-        html.Div(id="sc-price-panel"),
+        # Pre-render GPU panel so the tab is not blank on first load.
+        # The update_sc_price_panel callback updates this when the radio changes.
+        html.Div(id="sc-price-panel", children=_sc_price_section("GPU")),
 
         # ── PANEL 3: Sales Volume — Steam Survey ─────────────────────────────
         _sc_steam_panel(),
@@ -1792,18 +1822,19 @@ def upload_iv():
         except Exception:
             pass
 
-        now_str = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+        now_str = datetime.utcnow().strftime("%Y-%m-%d")
         cur = conn.cursor()
         for s in snapshots:
-            ticker   = s.get("ticker", "")
-            as_of    = s.get("as_of", now_str)
+            ticker        = s.get("ticker", "")
+            snapshot_date = (s.get("as_of") or now_str)[:10]   # accept either key; take date part only
             cur.execute("""
                 INSERT OR REPLACE INTO options_iv
-                    (ticker, iv_current, iv_1m_avg, iv_1q_avg, iv_6m_avg,
-                     iv_1y_avg, iv_pct_vs_1y, iv_52w_high, iv_52w_low, as_of)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
+                    (ticker, snapshot_date, iv_current, iv_1m_avg, iv_1q_avg, iv_6m_avg,
+                     iv_1y_avg, iv_pct_vs_1y, iv_52w_high, iv_52w_low, source)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 ticker,
+                snapshot_date,
                 s.get("iv_current"),
                 s.get("iv_1m_avg"),
                 s.get("iv_1q_avg"),
@@ -1812,7 +1843,7 @@ def upload_iv():
                 s.get("iv_pct_vs_1y"),
                 s.get("iv_52w_high"),
                 s.get("iv_52w_low"),
-                as_of,
+                "relay",
             ))
         conn.commit()
         conn.close()
