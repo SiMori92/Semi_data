@@ -180,6 +180,42 @@ def _section_title(text: str):
                                   "letterSpacing": "1px", "marginBottom": "8px"})
 
 
+def _crawl_timestamp() -> str:
+    """Return last completed crawl time in System Directive format: YYYY-MM-DD HH:MM UTC.
+    Falls back to 'Data not available in the latest crawl.' if no record exists."""
+    df = query(
+        "SELECT finished_at FROM crawl_runs WHERE status='completed' ORDER BY id DESC LIMIT 1"
+    )
+    if df.empty or df["finished_at"].iloc[0] is None:
+        return "Data not available in the latest crawl."
+    try:
+        dt = datetime.fromisoformat(str(df["finished_at"].iloc[0]))
+        return dt.strftime("%Y-%m-%d %H:%M UTC")
+    except Exception:
+        return str(df["finished_at"].iloc[0])
+
+
+def _source_footer(source_name: str, notes: str = "") -> html.Div:
+    """Return a standardised attribution footer per the System Directive.
+    Renders: [Source: <source_name>] · [Data Last Crawled/Updated: YYYY-MM-DD HH:MM UTC]
+    """
+    ts = _crawl_timestamp()
+    text_parts = [
+        html.Span(f"[Source: {source_name}]",
+                  style={"color": ACCENT, "fontWeight": "600", "marginRight": "12px"}),
+        html.Span(f"[Data Last Crawled/Updated: {ts}]",
+                  style={"color": SUBTEXT}),
+    ]
+    if notes:
+        text_parts.append(
+            html.Span(f"  ·  {notes}", style={"color": SUBTEXT})
+        )
+    return html.Div(text_parts, style={
+        "fontSize": "11px", "marginTop": "10px", "paddingTop": "8px",
+        "borderTop": "1px solid #30363d", "fontFamily": "monospace",
+    })
+
+
 def ticker_checklist(group_name: str, tickers: list[str], default_checked: list[str]):
     return html.Div([
         _section_title(group_name),
@@ -601,6 +637,9 @@ def tab_overview(tickers, start, end):
             dbc.Col(_card(dcc.Graph(figure=fig_vol, config={"displayModeBar": False})), width=7),
             dbc.Col(_card(heatmap_section), width=5),
         ]),
+        _card(_source_footer("Yahoo Finance / yfinance",
+                              "OHLCV daily price data and 1-month performance. "
+                              "Prices are as-of market close.")),
     ])
 
 
@@ -708,6 +747,9 @@ def tab_financials(tickers):
             dbc.Col(_card(trend_chart("ar_turnover",        "Accounts Receivable Turnover")), width=6),
             dbc.Col(_card(trend_chart("inventory_turnover", "Inventory Turnover")),           width=6),
         ]),
+        _card(_source_footer("Yahoo Finance / yfinance",
+                              "Quarterly financials sourced from SEC EDGAR filings via yfinance. "
+                              "Revenue, profit, margins, R&D, AR and inventory turnover ratios.")),
     ])
 
 
@@ -992,6 +1034,9 @@ def tab_sentiment(tickers):
         style_data_conditional=[{"if": {"row_index": "odd"}, "backgroundColor": BG2}],
     )
 
+    iv_source = ("Interactive Brokers TWS — real-time options IV term structure"
+                 if has_ibkr else
+                 "Yahoo Finance / yfinance — delayed ATM IV estimate (no period averages)")
     return html.Div([
         source_note,
         _card([_section_title("Sentiment Snapshot"), tbl]),
@@ -1000,6 +1045,8 @@ def tab_sentiment(tickers):
             dbc.Col(_card(dcc.Graph(figure=fig_drop,    config={"displayModeBar": False})), width=6),
             dbc.Col(_card(dcc.Graph(figure=fig_scatter, config={"displayModeBar": True})),  width=6),
         ]),
+        _card(_source_footer(iv_source,
+                              "Performance metrics (5d/10d/1m) from Yahoo Finance / yfinance.")),
     ])
 
 
@@ -1086,6 +1133,9 @@ def tab_cycles(tickers):
             dbc.Col(_card(dcc.Graph(figure=fig_dur, config={"displayModeBar": False})), width=7),
             dbc.Col(_card(dcc.Graph(figure=fig_vol, config={"displayModeBar": False})), width=5),
         ]),
+        _card(_source_footer("Yahoo Finance / yfinance — scipy.signal.argrelextrema",
+                              "Cycle peaks/troughs detected via rolling local extrema "
+                              f"(CYCLE_DETECTION_WINDOW=15 days). Price data from Yahoo Finance.")),
     ])
 
 
@@ -1326,6 +1376,10 @@ def tab_supply_chain():
                 "Delivery: Newegg in-stock status.",
                 style={"color": SUBTEXT, "fontSize": "12px", "margin": "0"},
             ),
+            _source_footer(
+                "PassMark / Newegg / Valve (Steam) / SEMI / Company Earnings Transcripts / TrendForce",
+                "Each panel carries its own source attribution below.",
+            ),
         ]),
 
         # ── PANEL 1 + 2: Price Index & In-Stock (GPU / CPU / RAM sub-tabs) ───
@@ -1453,6 +1507,13 @@ def _sc_price_section(category: str):
             dbc.Col(_card(dcc.Graph(figure=fig_pp,    config={"displayModeBar": True})), width=5),
         ]),
         delivery_section,
+        _card(_source_footer(
+            f"PassMark Performance Test / Newegg",
+            f"Price history: PassMark benchmark database. "
+            f"Performance/Price scatter: PassMark Score vs retail USD. "
+            f"Stock status: Newegg live listing. "
+            f"Run supply_chain_crawler.py to refresh.",
+        )),
     ])
 
 
@@ -1488,9 +1549,9 @@ def _sc_steam_panel():
         **PLOTLY_TEMPLATE["layout"],
         title=f"GPU Installed-Base Market Share — Steam HW Survey ({top['period'].iloc[0]})",
         height=480, xaxis_title="% of Steam Users",
-        yaxis=dict(autorange="reversed"),
         showlegend=False,
     )
+    fig.update_yaxes(autorange="reversed")
 
     # Vendor pie
     vendor_agg = (
@@ -1520,6 +1581,8 @@ def _sc_steam_panel():
             "Use as a relative market share proxy; absolute sales volumes require IDC/Mercury Research data.",
             style={"color": SUBTEXT, "fontSize": "11px", "marginTop": "8px"},
         ),
+        _source_footer("Valve / Steam Hardware Survey",
+                       "Monthly survey of ~120M active Steam users. Reflects installed base, not shipment volumes."),
     ])
 
 
@@ -1562,8 +1625,8 @@ def _sc_btb_panel():
         **PLOTLY_TEMPLATE["layout"],
         title="Order Volume — SEMI North America Equipment Book-to-Bill Ratio",
         height=320, xaxis_title="Month", yaxis_title="B2B Ratio",
-        yaxis=dict(range=[0.7, max(df["btb_ratio"].max() * 1.1, 1.4)]),
     )
+    fig.update_yaxes(range=[0.7, max(df["btb_ratio"].max() * 1.1, 1.4)])
 
     # Latest value KPI
     latest = df.iloc[-1]
@@ -1587,6 +1650,9 @@ def _sc_btb_panel():
             "Typically leads fab utilisation by 6–18 months.",
             style={"color": SUBTEXT, "fontSize": "11px", "marginTop": "8px"},
         ),
+        _source_footer("SEMI (Semiconductor Equipment & Materials International)",
+                       "North America Equipment Book-to-Bill Report. Published monthly. "
+                       "Update CURATED_SEMI_BTB in products_config.py each month."),
     ])
 
 
@@ -1631,8 +1697,8 @@ def _sc_capacity_panel():
         **PLOTLY_TEMPLATE["layout"],
         title="Manufacturer Occupancy — Average Fab Utilisation by Company (%)",
         height=360, xaxis_title="Quarter", yaxis_title="Utilisation (%)",
-        yaxis=dict(range=[40, 105]),
     )
+    fig_util.update_yaxes(range=[40, 105])
 
     # ── Latest utilisation gauge cards ────────────────────────────────────
     gauge_figs = []
@@ -1693,8 +1759,8 @@ def _sc_capacity_panel():
         title="Manufacturer Capacity — Latest Quarter (1,000s of 300mm-eq wafers/month)",
         height=320, barmode="group", xaxis_title="Segment",
         yaxis_title="Capacity (k wpm)",
-        xaxis=dict(tickangle=-20),
     )
+    fig_cap.update_xaxes(tickangle=-20)
 
     # ── Detailed data table ───────────────────────────────────────────────
     tbl_df = df[["company", "segment", "product_type", "period",
@@ -1732,11 +1798,8 @@ def _sc_capacity_panel():
         _card([
             _section_title("Capacity Detail (from Earnings Calls)"),
             tbl,
-            html.P(
-                "Source: TSMC / Samsung / SK Hynix / Micron / Intel quarterly earnings transcripts. "
-                "Update CURATED_CAPACITY in products_config.py each quarter.",
-                style={"color": SUBTEXT, "fontSize": "11px", "marginTop": "8px"},
-            ),
+            _source_footer("TSMC / Samsung / SK Hynix / Micron / Intel — Quarterly Earnings Transcripts",
+                           "Update CURATED_CAPACITY in products_config.py each quarter."),
         ]),
     ])
 
@@ -1815,12 +1878,10 @@ def _sc_dram_panel():
         html.Div(style={"marginTop": "12px"}),
         _section_title("Latest Prices & Year-on-Year Change"),
         tbl,
-        html.P(
-            "DDR4/DDR5 prices: TrendForce weekly spot report (benchmark die, USD). "
-            "HBM3E: estimated contract price per GB. "
-            "Update CURATED_DRAM_SPOT in products_config.py monthly.",
-            style={"color": SUBTEXT, "fontSize": "11px", "marginTop": "8px"},
-        ),
+        _source_footer("TrendForce / DRAMeXchange",
+                       "DDR4/DDR5: weekly spot benchmark die price (USD). "
+                       "HBM3E: estimated contract price per GB. "
+                       "Update CURATED_DRAM_SPOT in products_config.py monthly."),
     ])
 
 
