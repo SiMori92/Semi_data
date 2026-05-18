@@ -1325,6 +1325,355 @@ def sc_steam_query() -> pd.DataFrame:
     """)
 
 
+# ── Price Index vs SOXX ETF Correlation Chart ────────────────────────────────
+
+def _sc_vs_etf_panel():
+    """
+    Overlay the GPU / CPU / RAM retail price indices (monthly avg, normalised
+    to base=100) against SOXX (iShares Semiconductor ETF) historical price.
+    Falls back to SMH if SOXX has not been crawled yet.
+    Shows both a normalised comparison chart and a rolling correlation panel.
+    """
+
+    # ── 1. Build monthly price indices for each category ─────────────────────
+    CATEGORIES = [
+        ("GPU", GPU_PRODUCTS, "#76b900"),
+        ("CPU", CPU_PRODUCTS, "#0071C5"),
+        ("RAM", RAM_PRODUCTS, "#ED1C24"),
+    ]
+
+    price_series: dict[str, pd.Series] = {}
+
+    for cat, products, _ in CATEGORIES:
+        model_ids = list(products.keys())
+        if not model_ids:
+            continue
+        ph = ",".join("?" * len(model_ids))
+        df = query(
+            f"SELECT date, price_usd FROM sc_prices "
+            f"WHERE model_id IN ({ph}) AND price_usd IS NOT NULL "
+            f"ORDER BY date",
+            model_ids,
+        )
+        if df.empty:
+            continue
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df.dropna(subset=["date"])
+        df["price_usd"] = pd.to_numeric(df["price_usd"], errors="coerce")
+        # Monthly average across all models in the category
+        monthly = (
+            df.set_index("date")["price_usd"]
+            .resample("MS")          # Month Start
+            .mean()
+            .dropna()
+        )
+        if monthly.empty or len(monthly) < 2:
+            continue
+        price_series[cat] = monthly
+
+    # ── 2. Fetch SOXX (fallback: SMH) from daily_prices ──────────────────────
+    etf_ticker = None
+    for candidate in ("SOXX", "SMH"):
+        df_etf = query(
+            "SELECT date, close FROM daily_prices WHERE ticker=? ORDER BY date",
+            [candidate],
+        )
+        if not df_etf.empty:
+            etf_ticker = candidate
+            break
+
+    etf_monthly: pd.Series | None = None
+    if etf_ticker is not None and not df_etf.empty:
+        df_etf["date"]  = pd.to_datetime(df_etf["date"], errors="coerce")
+        df_etf["close"] = pd.to_numeric(df_etf["close"], errors="coerce")
+        etf_monthly = (
+            df_etf.set_index("date")["close"]
+            .resample("MS")
+            .last()             # Use month-end close as the ETF reference price
+            .dropna()
+        )
+        if etf_monthly.empty or len(etf_monthly) < 2:
+            etf_monthly = None
+
+    # ── 3. If no data at all — return placeholder ────────────────────────────
+    if not price_series and etf_monthly is None:
+        return _card([
+            _section_title("Price Index vs SOXX ETF — Correlation"),
+            html.P(
+                "No supply-chain price or ETF data yet. "
+                "Run: python supply_chain_crawler.py && python crawler.py --quick",
+                style={"color": SUBTEXT, "fontSize": "12px"},
+            ),
+        ])
+
+    # ── 4. Determine common date range and normalise to base=100 ─────────────
+    all_starts = [s.index.min() for s in price_series.values()]
+    if etf_monthly is not None:
+        all_starts.append(etf_monthly.index.min())
+    common_start = max(all_starts) if all_starts else None
+
+    def _normalise(series: pd.Series, base_date) -> pd.Series:
+        """Slice from base_date and rebase to 100."""
+        s = series[series.index >= base_date].copy()
+        base = s.iloc[0] if not s.empty and s.iloc[0] != 0 else None
+        return (s / base * 100) if base else s
+
+    CAT_COLORS = {"GPU": "#76b900", "CPU": "#00A3E0", "RAM": "#ED1C24"}
+
+    # ── 5. Build normalised overlay chart ────────────────────────────────────
+    fig = go.Figure()
+
+    # ETF first (drawn behind)
+    if etf_monthly is not None and common_start is not None:
+        etf_norm = _normalise(etf_monthly, common_start)
+        fig.add_trace(go.Scatter(
+            x=etf_norm.index,
+            y=etf_norm.values.round(2),
+            name=f"{etf_ticker} ETF",
+            mode="lines",
+            line=dict(width=3, color=ACCENT, dash="solid"),
+            hovertemplate=f"<b>{etf_ticker}</b><br>%{{x|%b %Y}}<br>Index: %{{y:.1f}}<extra></extra>",
+        ))
+        # Shade area under ETF
+        fig.add_trace(go.Scatter(
+            x=etf_norm.index, y=etf_norm.values.round(2),
+            mode="none",
+            fill="tozeroy",
+            fillcolor=f"rgba(88,166,255,0.07)",
+            showlegend=False, hoverinfo="skip",
+        ))
+
+    # Price indices
+    for cat, _, _col in CATEGORIES:
+        if cat not in price_series:
+            continue
+        s = price_series[cat]
+        s_norm = _normalise(s, common_start) if common_start else _normalise(s, s.index.min())
+        col = CAT_COLORS.get(cat, ACCENT)
+        fig.add_trace(go.Scatter(
+            x=s_norm.index,
+            y=s_norm.values.round(2),
+            name=f"{cat} Price Index",
+            mode="lines+markers",
+            line=dict(width=2, color=col, dash="dot"),
+            marker=dict(size=5, color=col),
+            hovertemplate=f"<b>{cat} Price Index</b><br>%{{x|%b %Y}}<br>Index: %{{y:.1f}}<extra></extra>",
+        ))
+
+    # Reference line at 100
+    fig.add_hline(y=100, line_dash="dash", line_color=SUBTEXT, line_width=1,
+                  annotation_text="Base = 100", annotation_position="right",
+                  annotation_font_color=SUBTEXT, annotation_font_size=10)
+
+    fig.update_layout(
+        **PLOTLY_TEMPLATE["layout"],
+        title=(
+            f"Hardware Price Index vs {etf_ticker} ETF — Normalised to 100"
+            if etf_ticker else "Hardware Price Index — Normalised to 100"
+        ),
+        height=440,
+        xaxis_title="Month",
+        yaxis_title="Index (Base = 100 at common start)",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+
+    # ── 6. Rolling 3-month correlation bar chart (GPU / CPU / RAM vs ETF) ────
+    corr_cards = []
+    if etf_monthly is not None and common_start is not None:
+        etf_s = etf_monthly[etf_monthly.index >= common_start]
+        for cat, _, _ in CATEGORIES:
+            if cat not in price_series:
+                continue
+            s = price_series[cat]
+            combined = pd.concat(
+                [s.rename("price"), etf_s.rename("etf")], axis=1
+            ).dropna()
+            if len(combined) < 4:
+                continue
+            corr = combined["price"].corr(combined["etf"])
+            col  = (GREEN if corr >= 0.6 else YELLOW if corr >= 0.2
+                    else RED if corr <= -0.2 else SUBTEXT)
+            corr_cards.append(dbc.Col(
+                _card([
+                    html.Div(cat, style={"fontSize": "11px", "color": SUBTEXT,
+                                         "textTransform": "uppercase", "letterSpacing": "0.5px"}),
+                    html.Div(
+                        f"r = {corr:+.2f}",
+                        style={"fontSize": "26px", "fontWeight": "700", "color": col},
+                    ),
+                    html.Div(
+                        "vs " + etf_ticker,
+                        style={"fontSize": "11px", "color": SUBTEXT},
+                    ),
+                    html.Div(
+                        ("Strong +ve" if corr >= 0.6 else
+                         "Moderate +ve" if corr >= 0.2 else
+                         "Weak / No" if corr > -0.2 else "Negative") + " correlation",
+                        style={"fontSize": "11px", "color": col, "marginTop": "2px"},
+                    ),
+                ], style={"textAlign": "center"}),
+                width=4,
+            ))
+
+    # Rolling 6-month window correlation line chart
+    fig_roll = None
+    if etf_monthly is not None and common_start is not None:
+        etf_s = etf_monthly[etf_monthly.index >= common_start]
+        fig_roll = go.Figure()
+        has_roll = False
+        for cat, _, _ in CATEGORIES:
+            if cat not in price_series:
+                continue
+            s = price_series[cat]
+            combined = pd.concat(
+                [s.rename("price"), etf_s.rename("etf")], axis=1
+            ).dropna()
+            if len(combined) < 6:
+                continue
+            rolling_corr = (
+                combined["price"]
+                .rolling(window=6, min_periods=4)
+                .corr(combined["etf"])
+            )
+            col = CAT_COLORS.get(cat, ACCENT)
+            fig_roll.add_trace(go.Scatter(
+                x=rolling_corr.index,
+                y=rolling_corr.values.round(3),
+                name=f"{cat} vs {etf_ticker}",
+                mode="lines",
+                line=dict(width=2, color=col),
+                hovertemplate=(
+                    f"<b>{cat} vs {etf_ticker}</b><br>"
+                    "%{x|%b %Y}<br>6M Rolling r: %{y:.2f}<extra></extra>"
+                ),
+            ))
+            has_roll = True
+
+        if has_roll:
+            fig_roll.add_hline(y=0,    line_dash="dash", line_color=SUBTEXT,  line_width=1)
+            fig_roll.add_hline(y=0.6,  line_dash="dot",  line_color=GREEN,    line_width=1,
+                               annotation_text="Strong +ve (0.6)", annotation_font_color=GREEN,
+                               annotation_font_size=10, annotation_position="right")
+            fig_roll.add_hline(y=-0.6, line_dash="dot",  line_color=RED,      line_width=1,
+                               annotation_text="Strong −ve (−0.6)", annotation_font_color=RED,
+                               annotation_font_size=10, annotation_position="right")
+            fig_roll.update_layout(
+                **PLOTLY_TEMPLATE["layout"],
+                title=f"6-Month Rolling Correlation: Price Index vs {etf_ticker}",
+                height=280,
+                xaxis_title="Month",
+                yaxis_title="Pearson r",
+                hovermode="x unified",
+            )
+            fig_roll.update_yaxes(range=[-1.05, 1.05])
+        else:
+            fig_roll = None
+
+    # ── 7. Latest price snapshot table ───────────────────────────────────────
+    tbl_rows = []
+    for cat, _, _ in CATEGORIES:
+        if cat not in price_series:
+            continue
+        s = price_series[cat]
+        if len(s) < 2:
+            continue
+        latest_price = s.iloc[-1]
+        prev_price   = s.iloc[-2]
+        mom          = (latest_price / prev_price - 1) * 100
+        yoy_price    = s.iloc[-13] if len(s) >= 13 else None
+        yoy          = ((latest_price / yoy_price - 1) * 100) if yoy_price else None
+        tbl_rows.append({
+            "Category": cat,
+            "Period": s.index[-1].strftime("%Y-%m"),
+            "Avg Price (USD)": f"${latest_price:,.0f}",
+            "MoM Δ": f"{mom:+.1f}%",
+            "YoY Δ": f"{yoy:+.1f}%" if yoy is not None else "—",
+        })
+    if etf_monthly is not None:
+        s = etf_monthly
+        if len(s) >= 2:
+            lp  = s.iloc[-1]; pp = s.iloc[-2]
+            mom = (lp / pp - 1) * 100
+            yoy_p = s.iloc[-13] if len(s) >= 13 else None
+            yoy   = ((lp / yoy_p - 1) * 100) if yoy_p else None
+            tbl_rows.append({
+                "Category": f"{etf_ticker} ETF",
+                "Period": s.index[-1].strftime("%Y-%m"),
+                "Avg Price (USD)": f"${lp:,.2f}",
+                "MoM Δ": f"{mom:+.1f}%",
+                "YoY Δ": f"{yoy:+.1f}%" if yoy is not None else "—",
+            })
+
+    tbl_df = pd.DataFrame(tbl_rows)
+    snapshot_tbl = None
+    if not tbl_df.empty:
+        snapshot_tbl = dash_table.DataTable(
+            data=tbl_df.to_dict("records"),
+            columns=[{"name": c, "id": c} for c in tbl_df.columns],
+            sort_action="native",
+            style_table={"overflowX": "auto"},
+            style_cell={
+                "backgroundColor": BG3, "color": TEXT,
+                "border": "1px solid #30363d", "fontSize": "13px", "padding": "6px 12px",
+            },
+            style_header={
+                "backgroundColor": BG2, "color": ACCENT,
+                "fontWeight": "600", "border": "1px solid #30363d",
+            },
+            style_data_conditional=[
+                {"if": {"filter_query": '{MoM Δ} contains "+"'}, "color": GREEN},
+                {"if": {"filter_query": '{MoM Δ} contains "-"'},  "color": RED},
+                {"if": {"filter_query": '{YoY Δ} contains "+"'}, "color": GREEN},
+                {"if": {"filter_query": '{YoY Δ} contains "-"'},  "color": RED},
+                {"if": {"row_index": "odd"}, "backgroundColor": BG2},
+            ],
+        )
+
+    # ── 8. Assemble panel ────────────────────────────────────────────────────
+    note_etf = (
+        f"Comparing hardware retail price trends (PassMark / Newegg) against "
+        f"{etf_ticker} (iShares Semiconductor ETF) as a proxy for semiconductor "
+        f"industry equity performance. A rising price index alongside a rising ETF "
+        f"may indicate demand-driven pricing power; divergence may signal inventory "
+        f"correction or supply-side oversupply."
+    )
+
+    children = [
+        _section_title(f"Hardware Price Index vs {etf_ticker} ETF — Industry Correlation"),
+        html.P(note_etf, style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "12px"}),
+        dcc.Graph(figure=fig, config={"displayModeBar": True}),
+    ]
+
+    if corr_cards:
+        children += [
+            html.Div(style={"marginTop": "8px"}),
+            _section_title("Full-Period Pearson Correlation"),
+            dbc.Row(corr_cards, className="g-2"),
+        ]
+
+    if fig_roll is not None:
+        children.append(_card(dcc.Graph(figure=fig_roll, config={"displayModeBar": True})))
+
+    if snapshot_tbl is not None:
+        children += [
+            html.Div(style={"marginTop": "8px"}),
+            _section_title("Latest Monthly Snapshot — Price & ETF"),
+            snapshot_tbl,
+        ]
+
+    etf_note = (f"SOXX (iShares Semiconductor ETF)" if etf_ticker == "SOXX"
+                else f"{etf_ticker} (VanEck Semiconductor ETF — SOXX proxy until SOXX is crawled)")
+    children.append(_source_footer(
+        f"PassMark / Newegg (price index)  ·  Yahoo Finance / yfinance ({etf_note})",
+        "Price index = monthly average retail price across all tracked models per category. "
+        f"ETF series = month-end close. Common base date: "
+        f"{common_start.strftime('%Y-%m') if common_start else 'N/A'}.",
+    ))
+
+    return _card(children)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 6 — SUPPLY CHAIN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1385,10 +1734,13 @@ def tab_supply_chain():
         # ── PANEL 1 + 2: Price Index & In-Stock (GPU / CPU / RAM sub-tabs) ───
         _card([_section_title("Product Category — Price Index & Availability"), price_tabs]),
 
-        # ── PANEL 3: Sales Volume — Steam Survey ─────────────────────────────
+        # ── PANEL 3: Price Index vs SOXX ETF Correlation ─────────────────────
+        _sc_vs_etf_panel(),
+
+        # ── PANEL 4: Sales Volume — Steam Survey ──────────────────────────────
         _sc_steam_panel(),
 
-        # ── PANEL 4: Order Volume — SEMI B2B ─────────────────────────────────
+        # ── PANEL 5: Order Volume — SEMI B2B ─────────────────────────────────
         _sc_btb_panel(),
 
         # ── PANEL 5 + 6: Manufacturer Capacity & Occupancy ───────────────────

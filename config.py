@@ -7,6 +7,7 @@ import os
 # Maps the display name used in the schema to the Yahoo Finance symbol
 TICKER_MAP = {
     # ETFs
+    "SOXX":         "SOXX",          # iShares Semiconductor ETF — supply chain benchmark
     "SOXL":         "SOXL",
     "SOXS":         "SOXS",
     "SMH":          "SMH",
@@ -48,6 +49,7 @@ TICKER_MAP = {
 
 # Ticker type (for grouping in UI)
 TICKER_TYPES = {
+    "SOXX": "ETF",
     "SOXL": "ETF", "SOXS": "ETF", "SMH": "ETF", "TQQQ": "ETF",
     "VIX": "ETF", "A50": "ETF", "USD": "ETF",
     "AMD": "Company", "AVGO": "Company", "ASML": "Company", "NVDA": "Company",
