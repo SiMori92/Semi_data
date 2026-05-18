@@ -324,28 +324,46 @@ def fetch_and_store_financials(
 # MARKET SENTIMENT
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _implied_vol(yf_symbol: str):
-    """Return (atm_iv, None, None, None, None) — historical IV needs a paid feed."""
+def _iv_fast(yf_symbol: str) -> float | None:
+    """
+    Quick IV estimate from yf.Ticker.info — always available, no options-chain
+    request needed.  Returns annualised IV in percent (e.g. 45.2 for 45.2 %),
+    or None if the field is absent / zero (common for ETFs, bonds, crypto).
+    """
     try:
-        t = yf.Ticker(yf_symbol)
+        info = yf.Ticker(yf_symbol).info
+        iv = info.get("impliedVolatility")
+        if iv and float(iv) > 0:
+            return round(float(iv) * 100, 2)
+        return None
+    except Exception:
+        return None
+
+
+def _iv_options_chain(yf_symbol: str) -> float | None:
+    """
+    Accurate ATM IV from the nearest-expiry options chain.  Slower (~2-4 s per
+    ticker) — only called when fetch_iv=True and the fast path returned None.
+    Returns annualised IV in percent or None on failure.
+    """
+    try:
+        t     = yf.Ticker(yf_symbol)
         dates = t.options
         if not dates:
-            return None, None, None, None, None
+            return None
         chain = t.option_chain(dates[0])
         calls = chain.calls
         if calls.empty:
-            return None, None, None, None, None
-        info = t.info
+            return None
+        info  = t.info
         price = _safe(info.get("currentPrice") or info.get("regularMarketPrice") or 0)
         if price and price > 0:
             idx = (calls["strike"] - price).abs().idxmin()
             iv  = _safe(calls.loc[idx, "impliedVolatility"]) or None
-            iv  = iv * 100 if iv else None
-        else:
-            iv = _safe(calls["impliedVolatility"].mean()) * 100
-        return iv, None, None, None, None
+            return iv * 100 if iv else None
+        return _safe(calls["impliedVolatility"].mean()) * 100
     except Exception:
-        return None, None, None, None, None
+        return None
 
 
 def fetch_and_store_sentiment(
@@ -375,8 +393,18 @@ def fetch_and_store_sentiment(
         p10 = _safe((closes[-1] / closes[-11] - 1) * 100) if len(closes) >= 11 else None
         p1m = _safe((closes[-1] / closes[-22] - 1) * 100) if len(closes) >= 22 else None
 
-        # Implied volatility (optional — slow)
-        iv, iv1m, iv3m, iv6m, iv1y = _implied_vol(yf_symbol) if fetch_iv else (None,)*5
+        # ── Implied Volatility ─────────────────────────────────────────────────
+        # Fast path: t.info["impliedVolatility"] — always attempted, no extra
+        # network call beyond what fetch_company_info already makes.
+        iv = _iv_fast(yf_symbol)
+
+        # Slow path: ATM IV from nearest-expiry options chain.  Only runs if
+        # the fast path returned nothing AND fetch_iv=True (non-quick mode).
+        if iv is None and fetch_iv:
+            iv = _iv_options_chain(yf_symbol)
+
+        # Historical IV averages not available from yfinance free tier.
+        iv1m = iv3m = iv6m = iv1y = None
 
         conn.execute("""
             INSERT OR REPLACE INTO market_sentiment VALUES

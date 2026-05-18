@@ -939,31 +939,79 @@ def tab_sentiment(tickers):
 
     else:
         # ── Fallback: yfinance ATM IV ──────────────────────────────────────
-        iv_df  = sent.dropna(subset=["implied_volatility"]) if not sent.empty else pd.DataFrame()
-        fig_iv = go.Figure()
+        # iv_df: rows where IV was successfully fetched (may be a subset of tickers)
+        iv_df = sent.dropna(subset=["implied_volatility"]) if not sent.empty else pd.DataFrame()
+
         if not iv_df.empty:
-            fig_iv.add_trace(go.Bar(
+            # Sort descending so highest-IV tickers are most prominent
+            iv_df = iv_df.sort_values("implied_volatility", ascending=False)
+            fig_iv = go.Figure(go.Bar(
                 x=iv_df["ticker"],
-                y=iv_df["implied_volatility"],
+                y=iv_df["implied_volatility"].round(1),
                 marker_color=[
-                    RED if v > 60 else YELLOW if v > 30 else GREEN
+                    RED    if v > 60 else
+                    YELLOW if v > 30 else
+                    GREEN
                     for v in iv_df["implied_volatility"]
                 ],
-                hovertemplate="<b>%{x}</b><br>IV (ATM est.): %{y:.1f}%<extra></extra>",
+                text=iv_df["implied_volatility"].map(lambda v: f"{v:.1f}%"),
+                textposition="outside",
+                hovertemplate="<b>%{x}</b><br>IV (ATM): %{y:.1f}%<extra></extra>",
             ))
-        fig_iv.update_layout(
-            **PLOTLY_TEMPLATE["layout"],
-            title="Implied Volatility — ATM Estimate (yfinance fallback)",
-            height=300, showlegend=False,
-        )
-        iv_section = _card([
-            dcc.Graph(figure=fig_iv, config={"displayModeBar": False}),
-            html.P(
-                "⚠️ Showing yfinance ATM snapshot — no period averages available. "
-                "Connect Interactive Brokers for full IV term structure (current, 1m, 1q, 6m, 1y averages).",
-                style={"color": YELLOW, "fontSize": "12px", "marginTop": "8px"},
-            ),
-        ])
+            fig_iv.update_layout(
+                **PLOTLY_TEMPLATE["layout"],
+                title=f"Implied Volatility — ATM Estimate via yfinance "
+                      f"({len(iv_df)} of {len(sent)} tickers have IV data)",
+                height=320, showlegend=False,
+                xaxis_title="Ticker", yaxis_title="Implied Volatility (%)",
+            )
+            fig_iv.update_yaxes(rangemode="tozero")
+
+            # Tickers where IV is genuinely missing (ETFs, bonds, crypto, etc.)
+            missing = sent[sent["implied_volatility"].isna()]["ticker"].tolist()
+            missing_note = (
+                f"IV not available for: {', '.join(missing[:12])}"
+                + (" …" if len(missing) > 12 else "")
+            ) if missing else ""
+
+            iv_section = _card([
+                dcc.Graph(figure=fig_iv, config={"displayModeBar": False}),
+                html.Div([
+                    html.Span(
+                        "⚠️ Source: yfinance ATM snapshot (annualised) — "
+                        "no historical period averages.  ",
+                        style={"color": YELLOW, "fontSize": "12px"},
+                    ),
+                    html.Span(
+                        "Connect Interactive Brokers for full IV term structure.",
+                        style={"color": SUBTEXT, "fontSize": "12px"},
+                    ),
+                ], style={"marginTop": "8px"}),
+                html.P(missing_note, style={"color": SUBTEXT, "fontSize": "11px",
+                                            "marginTop": "4px"}) if missing_note else html.Span(),
+            ])
+
+        else:
+            # IV column is entirely NULL — likely a --quick crawl with old crawler
+            # that never tried the fast path. Show an informative placeholder.
+            iv_section = _card([
+                _section_title("Implied Volatility — ATM Estimate"),
+                html.Div([
+                    html.P(
+                        "IV data is not yet in the database.",
+                        style={"color": YELLOW, "fontWeight": "600", "fontSize": "13px",
+                               "margin": "0 0 6px 0"},
+                    ),
+                    html.P(
+                        "The crawler now fetches IV automatically on every crawl "
+                        "(including --quick mode). "
+                        "Trigger a fresh crawl with the ⚡ Run Crawl button in the navbar "
+                        "and then reload — IV data will appear for US-listed stocks "
+                        "(ETFs, bonds, and crypto may still show N/A).",
+                        style={"color": SUBTEXT, "fontSize": "12px", "margin": "0"},
+                    ),
+                ], style={"padding": "20px", "textAlign": "center"}),
+            ])
 
     # ══════════════════════════════════════════════════════════════════════
     # SECTION B — PRICE PERFORMANCE SENTIMENT (unchanged)
@@ -1475,8 +1523,8 @@ def _sc_vs_etf_panel():
         xaxis_title="Month",
         yaxis_title="Index (Base = 100 at common start)",
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
+    fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
 
     # ── 6. Rolling 3-month correlation bar chart (GPU / CPU / RAM vs ETF) ────
     corr_cards = []
