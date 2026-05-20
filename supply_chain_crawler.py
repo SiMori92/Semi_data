@@ -34,6 +34,7 @@ from products_config import (
     CPU_PRODUCTS,
     CURATED_CAPACITY,
     CURATED_DRAM_SPOT,
+    CURATED_RETAIL_PRICES,
     CURATED_SEMI_BTB,
     GPU_PRODUCTS,
     NEWEGG_PRODUCTS,
@@ -189,6 +190,22 @@ def load_curated_dram_spot(conn: sqlite3.Connection) -> None:
     )
     conn.commit()
     log.info("DRAM spot prices loaded — %d rows.", len(CURATED_DRAM_SPOT))
+
+
+def load_curated_retail_prices(conn: sqlite3.Connection) -> None:
+    """
+    Load curated monthly retail price history for GPU, CPU, and RAM models into
+    sc_prices with source='curated'.  These rows give the chart panels historical
+    depth that PassMark/Newegg live crawls cannot provide (live crawls only record
+    the current day's price).  Existing curated rows are replaced on each run so
+    corrections in products_config.py propagate automatically.
+    """
+    conn.executemany(
+        "INSERT OR REPLACE INTO sc_prices VALUES (?,?,?,?,?,?,?)",
+        CURATED_RETAIL_PRICES,
+    )
+    conn.commit()
+    log.info("Curated retail prices loaded — %d rows.", len(CURATED_RETAIL_PRICES))
 
 
 def load_curated_semi_btb(conn: sqlite3.Connection) -> None:
@@ -549,6 +566,7 @@ def crawl_supply_chain(quick: bool = False) -> None:
     load_curated_capacity(conn)
     load_curated_dram_spot(conn)
     load_curated_semi_btb(conn)
+    load_curated_retail_prices(conn)
 
     log.info("─── Step 3: Live sources ────────────────────────────────────")
     if not quick:

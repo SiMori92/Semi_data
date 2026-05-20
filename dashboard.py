@@ -1801,8 +1801,9 @@ def tab_supply_chain():
 
 def _sc_price_section(category: str):
     """Price Index + Estimated Delivery (in-stock) for one category."""
-    df_pass = sc_prices_query(category, source="passmark")
-    df_new  = sc_prices_query(category, source="newegg")
+    df_pass    = sc_prices_query(category, source="passmark")
+    df_new     = sc_prices_query(category, source="newegg")
+    df_curated = sc_prices_query(category, source="curated")
 
     cat_label = {"GPU": "GPU", "CPU": "CPU", "RAM": "RAM Memory"}[category]
     COLOR_MAP = {
@@ -1810,12 +1811,13 @@ def _sc_price_section(category: str):
         "Samsung": "#1428A0", "SK Hynix": "#F15A24", "Micron": "#E31837",
     }
 
-    # ── Price history line chart (PassMark historical + Newegg current) ──
+    # ── Price history line chart ──────────────────────────────────────────
+    # Priority: PassMark historical > Curated (for RAM) > Newegg (bar, fallback)
+    df_hist = df_pass if not df_pass.empty else df_curated
     fig_price = go.Figure()
-    if not df_pass.empty:
-        for i, (mid, grp) in enumerate(df_pass.groupby("model_id")):
+    if not df_hist.empty:
+        for i, (mid, grp) in enumerate(df_hist.groupby("model_id")):
             short = grp["name"].iloc[0] if "name" in grp.columns else mid
-            brand = grp["brand"].iloc[0] if "brand" in grp.columns else ""
             col   = CHART_COLORS[i % len(CHART_COLORS)]
             fig_price.add_trace(go.Scatter(
                 x=grp["date"], y=grp["price_usd"],
@@ -1823,8 +1825,8 @@ def _sc_price_section(category: str):
                 line=dict(width=2, color=col),
                 hovertemplate=f"<b>{short}</b><br>Date: %{{x}}<br>Price: $%{{y:.0f}}<extra></extra>",
             ))
-    if not df_new.empty and df_pass.empty:
-        # Only Newegg data available — show as bar
+    elif not df_new.empty:
+        # Only Newegg data available — show as bar (snapshot)
         latest = df_new.sort_values("date").groupby("model_id").last().reset_index()
         fig_price.add_trace(go.Bar(
             x=latest["name"] if "name" in latest else latest["model_id"],
@@ -1908,10 +1910,11 @@ def _sc_price_section(category: str):
         ]),
         delivery_section,
         _card(_source_footer(
-            f"PassMark Performance Test / Newegg",
-            f"Price history: PassMark benchmark database. "
+            f"PassMark Performance Test / Newegg / Curated Market Data",
+            f"Price history: PassMark benchmark database (GPU/CPU) or curated retail pricing (RAM / supplemental). "
             f"Performance/Price scatter: PassMark Score vs retail USD. "
             f"Stock status: Newegg live listing. "
+            f"Curated data: monthly retail averages from 2023-01 to 2025-04. "
             f"Run supply_chain_crawler.py to refresh.",
         )),
     ])
