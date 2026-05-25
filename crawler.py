@@ -15,6 +15,7 @@ import logging
 import sqlite3
 import time
 from datetime import datetime
+from config import now_hkt as _now_hkt   # UTC+8 timestamp helper
 
 import numpy as np
 import pandas as pd
@@ -180,7 +181,7 @@ def fetch_company_info(display_name: str, yf_symbol: str) -> dict:
             "sector":       info.get("sector", ""),
             "industry":     info.get("industry", ""),
             "currency":     info.get("currency", "USD"),
-            "updated_at":   datetime.utcnow().isoformat(),
+            "updated_at":   _now_hkt().isoformat(),
         }
     except Exception as exc:
         log.warning("  company_info failed for %s: %s", yf_symbol, exc)
@@ -188,7 +189,7 @@ def fetch_company_info(display_name: str, yf_symbol: str) -> dict:
             "ticker": display_name, "display_name": display_name,
             "company_name": display_name, "exchange": "", "hq_country": "",
             "sector": "", "industry": "", "currency": "USD",
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": _now_hkt().isoformat(),
         }
 
 
@@ -458,12 +459,13 @@ def fetch_and_store_cycles(
                 up_dur = int(last_peak - last_trough)
 
                 # Volume change vs previous up-cycle
+                # Previous up-cycle = prior_troughs[-2] → most-recent peak before last_peak
                 curr_vol = float(np.mean(vols[last_trough:last_peak + 1]))
-                if len(prior_troughs) >= 2 and len(peaks) >= 2:
+                if len(prior_troughs) >= 2:
                     prev_trough = prior_troughs[-2]
                     prev_peaks  = peaks[peaks < last_peak]
-                    if len(prev_peaks) >= 2:
-                        prev_peak = prev_peaks[-2]
+                    if len(prev_peaks) >= 1:          # relaxed from >= 2 → >= 1
+                        prev_peak = prev_peaks[-1]    # use the immediately-prior peak
                         prev_vol  = float(np.mean(vols[prev_trough:prev_peak + 1]))
                         vol_diff  = _safe((curr_vol / prev_vol - 1) * 100) if prev_vol else None
 
@@ -507,7 +509,7 @@ def crawl(tickers=None, fetch_iv: bool = True) -> None:
 
     run_id = conn.execute(
         "INSERT INTO crawl_runs (started_at, tickers_attempted) VALUES (?, ?)",
-        (datetime.utcnow().isoformat(), len(tickers)),
+        (_now_hkt().isoformat(), len(tickers)),
     ).lastrowid
     conn.commit()
 
@@ -541,7 +543,7 @@ def crawl(tickers=None, fetch_iv: bool = True) -> None:
         UPDATE crawl_runs
         SET finished_at = ?, status = 'completed', tickers_ok = ?
         WHERE id = ?
-    """, (datetime.utcnow().isoformat(), ok_count, run_id))
+    """, (_now_hkt().isoformat(), ok_count, run_id))
     conn.commit()
     conn.close()
 

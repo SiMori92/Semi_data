@@ -28,6 +28,7 @@ import sys
 import time
 import argparse
 from datetime import datetime
+from config import now_hkt as _now_hkt
 
 import requests  # stdlib-requests, not ib_insync — for the HTTP POST
 
@@ -151,7 +152,7 @@ def run_relay(tickers_override=None):
                 continue
 
             metrics = calculate_iv_metrics(df, windows)
-            as_of   = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+            as_of   = _now_hkt().strftime("%Y-%m-%dT%H:%M:%S")
 
             snapshots.append({
                 "ticker":       ticker,

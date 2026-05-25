@@ -38,7 +38,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import DB_PATH, TICKER_MAP
+from config import DB_PATH, TICKER_MAP, now_hkt as _now_hkt
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
@@ -48,7 +48,7 @@ logging.basicConfig(
 )
 
 CONFIG_PATH = Path(__file__).parent / "ibkr_config.json"
-TODAY = datetime.utcnow().strftime("%Y-%m-%d")
+TODAY = _now_hkt().strftime("%Y-%m-%d")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

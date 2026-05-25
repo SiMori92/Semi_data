@@ -28,7 +28,7 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 
-from config import DB_PATH, REQUEST_DELAY_SECONDS
+from config import DB_PATH, REQUEST_DELAY_SECONDS, now_hkt as _now_hkt
 from products_config import (
     ALL_PRODUCTS,
     CPU_PRODUCTS,
@@ -36,6 +36,7 @@ from products_config import (
     CURATED_DRAM_SPOT,
     CURATED_RETAIL_PRICES,
     CURATED_SEMI_BTB,
+    CURATED_STEAM_SURVEY,
     GPU_PRODUCTS,
     NEWEGG_PRODUCTS,
     RAM_PRODUCTS,
@@ -61,8 +62,8 @@ SESSION.headers.update({
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 })
 
-TODAY = datetime.utcnow().strftime("%Y-%m-%d")
-THIS_MONTH = datetime.utcnow().strftime("%Y-%m")
+TODAY = _now_hkt().strftime("%Y-%m-%d")
+THIS_MONTH = _now_hkt().strftime("%Y-%m")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -215,6 +216,22 @@ def load_curated_semi_btb(conn: sqlite3.Connection) -> None:
     )
     conn.commit()
     log.info("SEMI B2B data loaded — %d rows.", len(CURATED_SEMI_BTB))
+
+
+def load_curated_steam_survey(conn: sqlite3.Connection) -> None:
+    """Seed sc_market_share with curated Steam HW Survey GPU share data.
+
+    The Steam HW Survey page is JS-rendered, so a plain HTTP GET rarely returns
+    the JSON payload.  This curated seed guarantees the GPU chart always has data;
+    the live crawl in crawl_steam_survey() supplements with fresher data when it
+    succeeds.
+    """
+    conn.executemany(
+        "INSERT OR REPLACE INTO sc_market_share VALUES (?,?,?,?)",
+        CURATED_STEAM_SURVEY,
+    )
+    conn.commit()
+    log.info("Steam HW Survey curated seed loaded — %d GPU entries.", len(CURATED_STEAM_SURVEY))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -438,11 +455,11 @@ def crawl_steam_survey(conn: sqlite3.Connection) -> None:
         resp.raise_for_status()
         html = resp.text
 
-        # Data is in JS: HardwareSurveyData = { ... }
-        # Each entry looks like: {"hardware":"NVIDIA GeForce RTX 4090","percentage":"2.34"}
+        # Data is embedded in JS: each entry has "hardware":"..." and "percentage":"..."
+        # Use re.DOTALL so the pattern spans newlines inside JS objects.
         matches = re.findall(
-            r'\{[^}]*"hardware"\s*:\s*"([^"]+)"[^}]*"percentage"\s*:\s*"([^"]+)"[^}]*\}',
-            html,
+            r'"hardware"\s*:\s*"([^"]+)"[\s\S]*?"percentage"\s*:\s*"([\d.]+)"',
+            html, re.DOTALL,
         )
         if not matches:
             # Fallback: parse HTML rows
@@ -551,10 +568,12 @@ def _parse_semi_btb_article(conn: sqlite3.Connection, url: str) -> None:
 # MAIN ORCHESTRATOR
 # ══════════════════════════════════════════════════════════════════════════════
 
-def crawl_supply_chain(quick: bool = False) -> None:
+def crawl_supply_chain(quick: bool = False, curated_only: bool = False) -> None:
     """
     Main entry point for supply-chain data collection.
-    quick=True  skips PassMark + Newegg (live price scraping).
+    curated_only=True  loads only in-memory curated data — no network calls at all.
+                       Idempotent (INSERT OR REPLACE); safe to run on every deploy.
+    quick=True         skips PassMark + Newegg but still hits Steam / SEMI BTB.
     """
     conn = get_conn()
     init_supply_chain_db(conn)
@@ -567,6 +586,12 @@ def crawl_supply_chain(quick: bool = False) -> None:
     load_curated_dram_spot(conn)
     load_curated_semi_btb(conn)
     load_curated_retail_prices(conn)
+    load_curated_steam_survey(conn)   # seed Steam data; live crawl may overwrite
+
+    if curated_only:
+        conn.close()
+        log.info("✅  Curated data load complete (--curated-only; no network calls).")
+        return
 
     log.info("─── Step 3: Live sources ────────────────────────────────────")
     if not quick:
@@ -593,7 +618,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Semiconductor Supply Chain Crawler")
     parser.add_argument(
         "--quick", action="store_true",
-        help="Skip live PassMark/Newegg price scraping (loads curated data only)",
+        help="Skip PassMark/Newegg scraping; still runs Steam + SEMI BTB network calls.",
+    )
+    parser.add_argument(
+        "--curated-only", action="store_true",
+        help="Load only in-memory curated data (zero network calls). "
+             "Safe to run on every deploy — idempotent via INSERT OR REPLACE.",
     )
     args = parser.parse_args()
-    crawl_supply_chain(quick=args.quick)
+    crawl_supply_chain(quick=args.quick, curated_only=args.curated_only)

@@ -2,6 +2,14 @@
 # Central configuration: tickers, Yahoo Finance symbol mapping, DB path, thresholds
 
 import os
+from datetime import datetime, timezone, timedelta
+
+# ── Timezone — all timestamps in the system use UTC+8 (Hong Kong Time) ───────
+HKT = timezone(timedelta(hours=8))
+
+def now_hkt() -> datetime:
+    """Return the current datetime in UTC+8 (HKT), tzinfo stripped for DB storage."""
+    return datetime.now(HKT).replace(tzinfo=None)
 
 # ── Ticker definitions from schema (Targets sheet) ───────────────────────────
 # Maps the display name used in the schema to the Yahoo Finance symbol
@@ -12,6 +20,7 @@ TICKER_MAP = {
     "SOXS":         "SOXS",
     "SMH":          "SMH",
     "TQQQ":         "TQQQ",
+    "QQQ":          "QQQ",           # Invesco Nasdaq-100 ETF
     "VIX":          "^VIX",
     "A50":          "ASHR",        # FTSE China A50 — best free proxy
     "USD":          "DX-Y.NYB",   # USD Index (DXY)
@@ -50,7 +59,7 @@ TICKER_MAP = {
 # Ticker type (for grouping in UI)
 TICKER_TYPES = {
     "SOXX": "ETF",
-    "SOXL": "ETF", "SOXS": "ETF", "SMH": "ETF", "TQQQ": "ETF",
+    "SOXL": "ETF", "SOXS": "ETF", "SMH": "ETF", "TQQQ": "ETF", "QQQ": "ETF",
     "VIX": "ETF", "A50": "ETF", "USD": "ETF",
     "AMD": "Company", "AVGO": "Company", "ASML": "Company", "NVDA": "Company",
     "QCOM": "Company", "MU": "Company", "ARM": "Company", "LRCX": "Company",

@@ -11,6 +11,7 @@ Then open http://127.0.0.1:8050 in your browser.
 import sqlite3
 from datetime import datetime, timedelta
 
+import numpy as np
 import dash
 import dash_bootstrap_components as dbc
 import pandas as pd
@@ -18,6 +19,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from dash import Input, Output, State, dcc, html, dash_table
 from plotly.subplots import make_subplots
+from scipy.signal import argrelextrema
 
 # Supply-chain product lists (for grouping in SC tab)
 from products_config import GPU_PRODUCTS, CPU_PRODUCTS, RAM_PRODUCTS
@@ -33,6 +35,7 @@ from config import (
     SEMI_ETFS,
     TICKER_TYPES,
     CHART_COLORS,
+    now_hkt as _now_hkt,
 )
 
 # ── Colour theme ──────────────────────────────────────────────────────────────
@@ -87,7 +90,7 @@ def last_crawl_time() -> str:
         return "Never"
     try:
         dt = datetime.fromisoformat(df["finished_at"].iloc[0])
-        return dt.strftime("%d %b %Y  %H:%M UTC")
+        return dt.strftime("%d %b %Y  %H:%M HKT")
     except Exception:
         return df["finished_at"].iloc[0]
 
@@ -181,7 +184,7 @@ def _section_title(text: str):
 
 
 def _crawl_timestamp() -> str:
-    """Return last completed crawl time in System Directive format: YYYY-MM-DD HH:MM UTC.
+    """Return last completed crawl time in System Directive format: YYYY-MM-DD HH:MM HKT.
     Falls back to 'Data not available in the latest crawl.' if no record exists."""
     df = query(
         "SELECT finished_at FROM crawl_runs WHERE status='completed' ORDER BY id DESC LIMIT 1"
@@ -190,14 +193,14 @@ def _crawl_timestamp() -> str:
         return "Data not available in the latest crawl."
     try:
         dt = datetime.fromisoformat(str(df["finished_at"].iloc[0]))
-        return dt.strftime("%Y-%m-%d %H:%M UTC")
+        return dt.strftime("%Y-%m-%d %H:%M HKT")
     except Exception:
         return str(df["finished_at"].iloc[0])
 
 
 def _source_footer(source_name: str, notes: str = "") -> html.Div:
     """Return a standardised attribution footer per the System Directive.
-    Renders: [Source: <source_name>] · [Data Last Crawled/Updated: YYYY-MM-DD HH:MM UTC]
+    Renders: [Source: <source_name>] · [Data Last Crawled/Updated: YYYY-MM-DD HH:MM HKT]
     """
     ts = _crawl_timestamp()
     text_parts = [
@@ -228,6 +231,68 @@ def ticker_checklist(group_name: str, tickers: list[str], default_checked: list[
             inputStyle={"marginRight": "6px", "accentColor": ACCENT},
         ),
     ], style={"marginBottom": "16px"})
+
+
+# ── Module-level ticker category helpers (shared by Overview & Sentiment tabs) ─
+_CAT_ORDER = {
+    "Semi Companies": SEMI_COMPANIES,
+    "Semi ETFs":      SEMI_ETFS,
+    "Macro / Other":  ["TQQQ", "QQQ", "VIX", "USD", "10YTreasury", "Gold", "BTC", "ETH"],
+    "Tech / Mixed":   ["MSFT", "GOOG", "META", "AAPL", "TSLA", "AMZN", "ORCL", "BRK.A"],
+}
+_SHORT_CAT = {
+    "Semi Companies": "Semi",
+    "Semi ETFs":      "ETF",
+    "Macro / Other":  "Macro",
+    "Tech / Mixed":   "Tech",
+}
+_cat_rank = {
+    tkr: (ci, ti)
+    for ci, (_, members) in enumerate(_CAT_ORDER.items())
+    for ti, tkr in enumerate(members)
+}
+
+
+def _ticker_cat(tkr: str) -> str:
+    """Return short category label, e.g. 'Semi', 'ETF', 'Macro', 'Tech'."""
+    for cat, members in _CAT_ORDER.items():
+        if tkr in members:
+            return _SHORT_CAT[cat]
+    return "Other"
+
+
+def _ticker_label(tkr: str) -> str:
+    """Return '[Cat] Ticker' label for display, e.g. '[Semi] NVDA'."""
+    cat = _ticker_cat(tkr)
+    return f"[{cat}] {tkr}" if cat != "Other" else tkr
+
+
+def _compute_hv30(tickers: list) -> pd.DataFrame:
+    """Compute 30-day Historical Volatility (annualised %) from daily_prices.
+    Returns a DataFrame with columns [ticker, hv30]."""
+    if not tickers:
+        return pd.DataFrame(columns=["ticker", "hv30"])
+    placeholders = ",".join("?" * len(tickers))
+    # Fetch ~50 trading days so we have enough after dropna
+    cutoff = (_now_hkt() - timedelta(days=75)).strftime("%Y-%m-%d")
+    df = query(
+        f"SELECT ticker, date, close FROM daily_prices "
+        f"WHERE ticker IN ({placeholders}) AND date >= ? ORDER BY ticker, date",
+        tickers + [cutoff],
+    )
+    if df.empty:
+        return pd.DataFrame(columns=["ticker", "hv30"])
+    rows = []
+    for tkr, grp in df.groupby("ticker"):
+        grp = grp.sort_values("date")
+        if len(grp) < 10:
+            rows.append({"ticker": tkr, "hv30": None})
+            continue
+        log_ret = grp["close"].pct_change().dropna()
+        # Use last 30 observations
+        hv = log_ret.tail(30).std() * (252 ** 0.5) * 100
+        rows.append({"ticker": tkr, "hv30": round(hv, 1) if pd.notna(hv) else None})
+    return pd.DataFrame(rows)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -294,8 +359,8 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
             _section_title("Date Range"),
             dcc.DatePickerRange(
                 id="date-range",
-                start_date=(datetime.today() - timedelta(days=365)).strftime("%Y-%m-%d"),
-                end_date=datetime.today().strftime("%Y-%m-%d"),
+                start_date=(_now_hkt() - timedelta(days=365)).strftime("%Y-%m-%d"),
+                end_date=_now_hkt().strftime("%Y-%m-%d"),
                 display_format="DD MMM YYYY",
                 style={"fontSize": "12px", "width": "100%"},
             ),
@@ -308,7 +373,7 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
             ),
             ticker_checklist("Semi ETFs",   SEMI_ETFS,   ["SMH"]),
             ticker_checklist("Macro / Other",
-                ["TQQQ", "VIX", "USD", "10YTreasury", "Gold", "BTC", "ETH"],
+                ["TQQQ", "QQQ", "VIX", "USD", "10YTreasury", "Gold", "BTC", "ETH"],
                 ["VIX", "10YTreasury", "Gold"],
             ),
             ticker_checklist("Tech / Mixed",
@@ -394,7 +459,7 @@ def select_clear_all(select_clicks, clear_clicks):
         return (
             SEMI_COMPANIES,
             SEMI_ETFS,
-            ["TQQQ", "VIX", "USD", "10YTreasury", "Gold", "BTC", "ETH"],
+            ["TQQQ", "QQQ", "VIX", "USD", "10YTreasury", "Gold", "BTC", "ETH"],
             ["MSFT", "GOOG", "META", "AAPL", "TSLA", "AMZN", "ORCL", "BRK.A"],
         )
     # Clear All
@@ -416,8 +481,8 @@ def update_crawl_time(*_):
     prevent_initial_call=True,
 )
 def show_reload_stamp(_):
-    """Show 'Reloaded HH:MM UTC' next to Last Crawl after each manual refresh."""
-    return f"✓ Reloaded {datetime.utcnow().strftime('%H:%M')} UTC"
+    """Show 'Reloaded HH:MM HKT' next to Last Crawl after each manual refresh."""
+    return f"✓ Reloaded {_now_hkt().strftime('%H:%M')} HKT"
 
 
 @app.callback(
@@ -518,7 +583,7 @@ def render_tab(active_tab, tickers, start_date, end_date, _refresh):
         return _card(html.P("Select at least one ticker from the sidebar.", style={"color": SUBTEXT}))
 
     start = start_date[:10] if start_date else "2023-01-01"
-    end   = end_date[:10]   if end_date   else datetime.today().strftime("%Y-%m-%d")
+    end   = end_date[:10]   if end_date   else _now_hkt().strftime("%Y-%m-%d")
 
     _TAB_MAP = {
         "tab-overview":     lambda: tab_overview(tickers, start, end),
@@ -574,10 +639,22 @@ def tab_overview(tickers, start, end):
                                             style={"textAlign": "center"}))
         )
 
-    # ── Normalised price chart (base 100) ─────────────────────────────────
-    fig_price = go.Figure()
+    # ── Merged Price + Volume subplot (shared X axis, auto-synced) ───────────
+    # Always fetch 5 Y so 1Y / 3Y / 5Y rangeselector buttons have full data.
+    _price_start_5y = (_now_hkt() - timedelta(days=365 * 5)).strftime("%Y-%m-%d")
+    prices_5y = price_data(tickers, _price_start_5y, end)
+
+    fig_price = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.04,
+        row_heights=[0.68, 0.32],
+        subplot_titles=("Price Performance (Base=100 at range start)", "Trading Volume"),
+    )
+
+    # Row 1 — normalised price lines
     for i, tkr in enumerate(tickers):
-        df = prices[prices["ticker"] == tkr].sort_values("date")
+        df = prices_5y[prices_5y["ticker"] == tkr].sort_values("date")
         if df.empty or len(df) < 2:
             continue
         base = df["close"].iloc[0]
@@ -588,36 +665,78 @@ def tab_overview(tickers, start, end):
             x=df["date"], y=norm, name=tkr, mode="lines",
             line=dict(width=2, color=CHART_COLORS[i % len(CHART_COLORS)]),
             hovertemplate=f"<b>{tkr}</b><br>Date: %{{x}}<br>Indexed: %{{y:.1f}}<extra></extra>",
-        ))
-    fig_price.update_layout(**PLOTLY_TEMPLATE["layout"],
-                             title="Price Performance (Base=100)", height=400,
-                             hovermode="x unified")
+        ), row=1, col=1)
 
-    # ── Volume bar chart (latest 60 days, selected tickers) ───────────────
-    fig_vol = go.Figure()
-    cutoff  = (datetime.strptime(end, "%Y-%m-%d") - timedelta(days=60)).strftime("%Y-%m-%d")
-    for i, tkr in enumerate(tickers[:8]):   # limit to 8 for readability
-        df = prices[(prices["ticker"] == tkr) & (prices["date"] >= cutoff)].sort_values("date")
+    # Row 2 — volume bars (full 5 Y so they sync with the price range)
+    for i, tkr in enumerate(tickers[:8]):   # cap at 8 for readability
+        df = prices_5y[prices_5y["ticker"] == tkr].sort_values("date")
         if df.empty:
             continue
-        fig_vol.add_trace(go.Bar(
+        fig_price.add_trace(go.Bar(
             x=df["date"], y=df["volume"], name=tkr,
             marker_color=CHART_COLORS[i % len(CHART_COLORS)],
+            showlegend=False,   # legend already shown by price trace above
             hovertemplate=f"<b>{tkr}</b><br>%{{x}}<br>Vol: %{{y:,.0f}}<extra></extra>",
-        ))
-    fig_vol.update_layout(**PLOTLY_TEMPLATE["layout"],
-                           title="Trading Volume (last 60 days)", height=280,
-                           barmode="overlay", bargap=0.1)
+        ), row=2, col=1)
 
-    # ── Performance heatmap ───────────────────────────────────────────────
+    # Default view: last 1 year; rangeselector drives both rows via shared xaxis
+    _1y_ago = (_now_hkt() - timedelta(days=365)).strftime("%Y-%m-%d")
+
+    _base_layout = PLOTLY_TEMPLATE["layout"].copy()
+    fig_price.update_layout(
+        **_base_layout,
+        height=620,
+        hovermode="x unified",
+        barmode="overlay",
+        bargap=0.1,
+        # subplot_titles styling
+        font=dict(color=TEXT),
+    )
+    # Shared x-axis lives on xaxis (row 1); xaxis2 (row 2) inherits the range
+    fig_price.update_xaxes(
+        range=[_1y_ago, end],
+        rangeselector=dict(
+            buttons=[
+                dict(count=1, label="1Y", step="year", stepmode="backward"),
+                dict(count=3, label="3Y", step="year", stepmode="backward"),
+                dict(count=5, label="5Y", step="year", stepmode="backward"),
+            ],
+            activecolor=ACCENT,
+            bgcolor=BG2,
+            bordercolor="#30363d",
+            borderwidth=1,
+            font=dict(color=TEXT, size=12),
+            x=0, y=1.06, xanchor="left",
+        ),
+        rangeslider=dict(visible=False),
+        type="date",
+        row=1, col=1,
+    )
+    fig_price.update_yaxes(title_text="Index (Base=100)", row=1, col=1,
+                            gridcolor="#21262d", color=TEXT)
+    fig_price.update_yaxes(title_text="Volume", row=2, col=1,
+                            gridcolor="#21262d", color=TEXT)
+    # Style the subplot title annotations to match the dark theme
+    for ann in fig_price.layout.annotations:
+        ann.update(font=dict(color=TEXT, size=13))
+
+    # ── Performance heatmap — with sidebar category labels ───────────────
+    # Uses module-level _CAT_ORDER, _SHORT_CAT, _ticker_label, _cat_rank
     if not sent.empty:
         cols_perf = ["perf_5d", "perf_10d", "perf_1m"]
         hm_data = sent[["ticker"] + cols_perf].set_index("ticker")
         hm_data = hm_data.apply(pd.to_numeric, errors="coerce")
+
+        # Sort rows by category order so same-group tickers appear together
+        sorted_idx = sorted(hm_data.index, key=lambda t: _cat_rank.get(t, (99, 99)))
+        hm_data = hm_data.loc[sorted_idx]
+
+        y_labels  = [_ticker_label(t) for t in hm_data.index]
+
         fig_hm = go.Figure(go.Heatmap(
             z=hm_data.values,
             x=["5-Day %", "10-Day %", "1-Month %"],
-            y=hm_data.index.tolist(),
+            y=y_labels,
             colorscale=[[0, RED], [0.5, BG3], [1, GREEN]],
             zmid=0,
             text=hm_data.round(1).astype(str).values + "%",
@@ -625,7 +744,8 @@ def tab_overview(tickers, start, end):
             hovertemplate="<b>%{y}</b><br>%{x}: %{z:.2f}%<extra></extra>",
         ))
         fig_hm.update_layout(**PLOTLY_TEMPLATE["layout"],
-                              title="Return Heatmap", height=max(250, len(tickers)*28))
+                              title="Return Heatmap",
+                              height=max(280, len(tickers) * 30))
         heatmap_section = dcc.Graph(figure=fig_hm, config={"displayModeBar": False})
     else:
         heatmap_section = html.P("Sentiment data not yet available.", style={"color": SUBTEXT})
@@ -633,10 +753,7 @@ def tab_overview(tickers, start, end):
     return html.Div([
         dbc.Row(kpi_cards, className="g-2", style={"marginBottom": "12px"}),
         _card(dcc.Graph(figure=fig_price, config={"displayModeBar": True})),
-        dbc.Row([
-            dbc.Col(_card(dcc.Graph(figure=fig_vol, config={"displayModeBar": False})), width=7),
-            dbc.Col(_card(heatmap_section), width=5),
-        ]),
+        _card(heatmap_section),
         _card(_source_footer("Yahoo Finance / yfinance",
                               "OHLCV daily price data and 1-month performance. "
                               "Prices are as-of market close.")),
@@ -654,6 +771,10 @@ def tab_financials(tickers):
 
     df["period_end"] = pd.to_datetime(df["period_end"])
     df = df.sort_values("period_end")
+
+    # ── Limit all comparison charts to the last 3 years (12 quarters) ────────
+    _cutoff_3y = pd.Timestamp(_now_hkt() - timedelta(days=365 * 3))
+    df = df[df["period_end"] >= _cutoff_3y]
 
     def metric_chart(col: str, title: str, pct: bool = False, yformat: str = "$,.0f"):
         fig = go.Figure()
@@ -749,6 +870,7 @@ def tab_financials(tickers):
         ]),
         _card(_source_footer("Yahoo Finance / yfinance",
                               "Quarterly financials sourced from SEC EDGAR filings via yfinance. "
+                              "Charts show last 3 years (≤12 quarters). "
                               "Revenue, profit, margins, R&D, AR and inventory turnover ratios.")),
     ])
 
@@ -1051,35 +1173,95 @@ def tab_sentiment(tickers):
                                height=360, xaxis_title="5-Day Return (%)",
                                yaxis_title="1-Month Return (%)")
 
-    # Performance + IV summary table
+    # ── Performance + IV summary table ───────────────────────────────────
     tbl_df = sent[["ticker", "close_price", "perf_5d", "perf_10d", "perf_1m",
                    "days_since_large_drop"]].copy()
-    # Merge IBKR current IV if available, else fallback to yfinance
+
+    # 1. Category column — add & sort by sidebar order
+    tbl_df["category"] = tbl_df["ticker"].map(_ticker_cat)
+    tbl_df["_sort_key"] = tbl_df["ticker"].map(lambda t: _cat_rank.get(t, (99, 99)))
+    tbl_df = tbl_df.sort_values("_sort_key").drop(columns=["_sort_key"])
+
+    # 2. IV column — IBKR preferred; yfinance next; HV30 final fallback
     if has_ibkr:
-        iv_now = ibkr_iv[["ticker", "iv_current"]].rename(columns={"iv_current": "implied_volatility"})
+        iv_now = ibkr_iv[["ticker", "iv_current"]].rename(columns={"iv_current": "_iv_val"})
         tbl_df = tbl_df.merge(iv_now, on="ticker", how="left")
+        tbl_df["iv_source"] = tbl_df["_iv_val"].apply(lambda x: "IBKR" if pd.notna(x) else "N/A")
     else:
-        tbl_df = tbl_df.merge(
-            sent[["ticker", "implied_volatility"]], on="ticker", how="left")
+        tbl_df = tbl_df.merge(sent[["ticker", "implied_volatility"]].rename(
+            columns={"implied_volatility": "_iv_val"}), on="ticker", how="left")
+        # Where yfinance IV is NULL, substitute HV30
+        hv_df  = _compute_hv30(tbl_df["ticker"].tolist())
+        tbl_df = tbl_df.merge(hv_df, on="ticker", how="left")
+        def _pick_iv(row):
+            if pd.notna(row["_iv_val"]):
+                return row["_iv_val"], "IV"
+            if pd.notna(row.get("hv30")):
+                return row["hv30"], "HV30"
+            return None, "N/A"
+        tbl_df[["_iv_val", "iv_source"]] = tbl_df.apply(
+            lambda r: pd.Series(_pick_iv(r)), axis=1)
+        tbl_df = tbl_df.drop(columns=["hv30"], errors="ignore")
+
+    # 3. Format numeric columns as strings (enables colour-conditional styling)
     for col in ["perf_5d", "perf_10d", "perf_1m"]:
         tbl_df[col] = tbl_df[col].map(lambda x: f"{x:+.1f}%" if pd.notna(x) else "—")
-    tbl_df["implied_volatility"] = tbl_df["implied_volatility"].map(
+    tbl_df["_iv_val"] = tbl_df["_iv_val"].map(
         lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
-    tbl_df["close_price"]        = tbl_df["close_price"].map(
+    tbl_df["close_price"]           = tbl_df["close_price"].map(
         lambda x: f"${x:,.2f}" if pd.notna(x) else "—")
     tbl_df["days_since_large_drop"] = tbl_df["days_since_large_drop"].map(
         lambda x: str(int(x)) if pd.notna(x) else "—")
 
+    # Reorder & rename columns for display
+    tbl_df = tbl_df.rename(columns={
+        "ticker":               "Ticker",
+        "category":             "Category",
+        "close_price":          "Close Price",
+        "perf_5d":              "Perf 5D",
+        "perf_10d":             "Perf 10D",
+        "perf_1m":              "Perf 1M",
+        "days_since_large_drop":"Days Since Drop",
+        "_iv_val":              "Vol %",
+        "iv_source":            "Vol Source",
+    })
+    display_cols = ["Ticker", "Category", "Close Price",
+                    "Perf 5D", "Perf 10D", "Perf 1M",
+                    "Days Since Drop", "Vol %", "Vol Source"]
+    tbl_df = tbl_df[[c for c in display_cols if c in tbl_df.columns]]
+
+    # 4. Conditional styles: green/red for perf columns; source badge colours
+    perf_cols = ["Perf 5D", "Perf 10D", "Perf 1M"]
+    cond_styles = [{"if": {"row_index": "odd"}, "backgroundColor": BG2}]
+    for col in perf_cols:
+        cond_styles += [
+            {"if": {"filter_query": f'{{{col}}} contains "+"', "column_id": col},
+             "color": GREEN, "fontWeight": "600"},
+            {"if": {"filter_query": f'{{{col}}} contains "-"', "column_id": col},
+             "color": RED,   "fontWeight": "600"},
+        ]
+    # Vol Source badge colouring
+    cond_styles += [
+        {"if": {"filter_query": '{Vol Source} = "IBKR"',  "column_id": "Vol Source"},
+         "color": GREEN,  "fontWeight": "600"},
+        {"if": {"filter_query": '{Vol Source} = "IV"',    "column_id": "Vol Source"},
+         "color": ACCENT, "fontWeight": "600"},
+        {"if": {"filter_query": '{Vol Source} = "HV30"',  "column_id": "Vol Source"},
+         "color": YELLOW, "fontWeight": "600"},
+        {"if": {"filter_query": '{Vol Source} = "N/A"',   "column_id": "Vol Source"},
+         "color": SUBTEXT},
+    ]
+
     tbl = dash_table.DataTable(
         data=tbl_df.to_dict("records"),
-        columns=[{"name": c.replace("_", " ").title(), "id": c} for c in tbl_df.columns],
+        columns=[{"name": c, "id": c} for c in tbl_df.columns],
         sort_action="native",
         style_table={"overflowX": "auto"},
         style_cell={"backgroundColor": BG3, "color": TEXT, "border": "1px solid #30363d",
                     "fontSize": "13px", "padding": "6px 10px"},
         style_header={"backgroundColor": BG2, "color": ACCENT, "fontWeight": "600",
                       "border": "1px solid #30363d"},
-        style_data_conditional=[{"if": {"row_index": "odd"}, "backgroundColor": BG2}],
+        style_data_conditional=cond_styles,
     )
 
     iv_source = ("Interactive Brokers TWS — real-time options IV term structure"
@@ -1102,23 +1284,180 @@ def tab_sentiment(tickers):
 # TAB 4 — CYCLE ANALYSIS
 # ══════════════════════════════════════════════════════════════════════════════
 
+_CYCLE_WINDOW = 15   # trading days — matches crawler.py CYCLE_DETECTION_WINDOW
+
+
+def _build_cycle_chart(ticker: str) -> go.Figure:
+    """Return a Plotly figure: price line + green/red shading per cycle segment."""
+    cutoff = (_now_hkt() - timedelta(days=365 * 2)).strftime("%Y-%m-%d")
+    df = query(
+        "SELECT date, close FROM daily_prices WHERE ticker=? AND date>=? ORDER BY date",
+        [ticker, cutoff],
+    )
+    fig = go.Figure()
+    fig.update_layout(
+        **PLOTLY_TEMPLATE["layout"],
+        title=f"{ticker} — Cycle Detection  (window = {_CYCLE_WINDOW} trading days)",
+        height=400, xaxis_title="Date", yaxis_title="Price (USD)",
+        hovermode="x unified",
+    )
+    if df.empty or len(df) < _CYCLE_WINDOW * 3:
+        fig.add_annotation(
+            text="Not enough price history for cycle detection (need ≥ 2 years).",
+            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+            font=dict(color=SUBTEXT, size=13),
+        )
+        return fig
+
+    closes = df["close"].values.astype(float)
+    dates  = pd.to_datetime(df["date"]).values
+
+    peaks   = argrelextrema(closes, np.greater_equal, order=_CYCLE_WINDOW)[0]
+    troughs = argrelextrema(closes, np.less_equal,    order=_CYCLE_WINDOW)[0]
+
+    # Build sorted event list: (index, type)
+    events = sorted(
+        [(i, "peak")   for i in peaks] +
+        [(i, "trough") for i in troughs],
+        key=lambda e: e[0],
+    )
+
+    # Shade each segment between consecutive events
+    for k in range(len(events) - 1):
+        i0, t0 = events[k]
+        i1, t1 = events[k + 1]
+        d0, d1 = dates[i0], dates[i1]
+        p0, p1 = closes[i0], closes[i1]
+
+        if t0 == "trough" and t1 == "peak":
+            pct   = (p1 / p0 - 1) * 100
+            color = GREEN
+            label = f"+{pct:.0f}%"
+        elif t0 == "peak" and t1 == "trough":
+            pct   = (p1 / p0 - 1) * 100
+            color = RED
+            label = f"{pct:.0f}%"
+        else:
+            color = SUBTEXT
+            label = ""
+
+        fig.add_vrect(
+            x0=str(d0)[:10], x1=str(d1)[:10],
+            fillcolor=color, opacity=0.10, line_width=0,
+            annotation_text=label,
+            annotation_position="top left",
+            annotation_font=dict(color=color, size=9),
+        )
+
+    # Price line
+    fig.add_trace(go.Scatter(
+        x=[str(d)[:10] for d in dates],
+        y=closes,
+        name=ticker,
+        line=dict(color=ACCENT, width=2),
+        hovertemplate="<b>%{x}</b>  $%{y:,.2f}<extra></extra>",
+    ))
+
+    # Peak markers
+    if len(peaks):
+        fig.add_trace(go.Scatter(
+            x=[str(dates[i])[:10] for i in peaks],
+            y=closes[peaks],
+            mode="markers", name="Peak",
+            marker=dict(symbol="triangle-up", color=GREEN, size=10,
+                        line=dict(width=1, color=BG3)),
+            hovertemplate="<b>Peak</b>  $%{y:,.2f}<extra></extra>",
+        ))
+
+    # Trough markers
+    if len(troughs):
+        fig.add_trace(go.Scatter(
+            x=[str(dates[i])[:10] for i in troughs],
+            y=closes[troughs],
+            mode="markers", name="Trough",
+            marker=dict(symbol="triangle-down", color=RED, size=10,
+                        line=dict(width=1, color=BG3)),
+            hovertemplate="<b>Trough</b>  $%{y:,.2f}<extra></extra>",
+        ))
+
+    return fig
+
+
 def tab_cycles(tickers):
     cyc = cycle_data(tickers)
 
     if cyc.empty:
-        return _card(html.P("No cycle data found. Run crawler.py with ≥2 years of price history.", style={"color": SUBTEXT}))
+        return _card(html.P("No cycle data found. Run crawler.py with ≥2 years of price history.",
+                            style={"color": SUBTEXT}))
 
     cyc = cyc.dropna(subset=["up_cycle_magnitude", "down_cycle_magnitude"], how="all")
 
+    # ── Summary table — with Category column, sorted by sidebar order ────
+    tbl_df = cyc[["ticker", "up_cycle_magnitude", "up_cycle_duration",
+                  "down_cycle_magnitude", "down_cycle_duration",
+                  "vol_diff_last_cycle"]].copy()
+
+    tbl_df["category"]  = tbl_df["ticker"].map(_ticker_cat)
+    tbl_df["_sort_key"] = tbl_df["ticker"].map(lambda t: _cat_rank.get(t, (99, 99)))
+    tbl_df = tbl_df.sort_values("_sort_key").drop(columns=["_sort_key"])
+
+    for col in ["up_cycle_magnitude", "down_cycle_magnitude"]:
+        tbl_df[col] = tbl_df[col].map(lambda x: f"+{x:.1f}%" if pd.notna(x) and x >= 0
+                                      else (f"{x:.1f}%" if pd.notna(x) else "—"))
+    tbl_df["vol_diff_last_cycle"] = tbl_df["vol_diff_last_cycle"].map(
+        lambda x: f"{x:+.1f}%" if pd.notna(x) else "—")
+    for col in ["up_cycle_duration", "down_cycle_duration"]:
+        tbl_df[col] = tbl_df[col].map(lambda x: f"{int(x)}d" if pd.notna(x) else "—")
+
+    tbl_df = tbl_df.rename(columns={
+        "ticker":               "Ticker",
+        "category":             "Category",
+        "up_cycle_magnitude":   "↑ Magnitude",
+        "up_cycle_duration":    "↑ Duration",
+        "down_cycle_magnitude": "↓ Magnitude",
+        "down_cycle_duration":  "↓ Duration",
+        "vol_diff_last_cycle":  "Vol Δ vs Prior Cycle",
+    })
+
+    # Conditional colour: green for positive magnitudes/vol, red for negative
+    tbl_cond = [{"if": {"row_index": "odd"}, "backgroundColor": BG2}]
+    for col in ["↑ Magnitude", "Vol Δ vs Prior Cycle"]:
+        tbl_cond += [
+            {"if": {"filter_query": f'{{{col}}} contains "+"', "column_id": col},
+             "color": GREEN, "fontWeight": "600"},
+        ]
+    for col in ["↓ Magnitude", "Vol Δ vs Prior Cycle"]:
+        tbl_cond += [
+            {"if": {"filter_query": f'{{{col}}} contains "-"', "column_id": col},
+             "color": RED, "fontWeight": "600"},
+        ]
+
+    tbl = dash_table.DataTable(
+        data=tbl_df.to_dict("records"),
+        columns=[{"name": c, "id": c} for c in tbl_df.columns],
+        sort_action="native",
+        style_table={"overflowX": "auto"},
+        style_cell={"backgroundColor": BG3, "color": TEXT, "border": "1px solid #30363d",
+                    "fontSize": "13px", "padding": "6px 10px"},
+        style_header={"backgroundColor": BG2, "color": ACCENT, "fontWeight": "600",
+                      "border": "1px solid #30363d"},
+        style_data_conditional=tbl_cond,
+    )
+
     # ── Up vs Down cycle magnitude ────────────────────────────────────────
+    # Sort bars by category order for the bar charts too
+    cyc_sorted = cyc.copy()
+    cyc_sorted["_sk"] = cyc_sorted["ticker"].map(lambda t: _cat_rank.get(t, (99, 99)))
+    cyc_sorted = cyc_sorted.sort_values("_sk").drop(columns=["_sk"])
+
     fig_mag = go.Figure()
     fig_mag.add_trace(go.Bar(
-        name="Up Cycle (%)", x=cyc["ticker"], y=cyc["up_cycle_magnitude"],
+        name="Up Cycle (%)", x=cyc_sorted["ticker"], y=cyc_sorted["up_cycle_magnitude"],
         marker_color=GREEN,
         hovertemplate="<b>%{x}</b><br>Up: +%{y:.1f}%<extra></extra>",
     ))
     fig_mag.add_trace(go.Bar(
-        name="Down Cycle (%)", x=cyc["ticker"], y=cyc["down_cycle_magnitude"],
+        name="Down Cycle (%)", x=cyc_sorted["ticker"], y=cyc_sorted["down_cycle_magnitude"],
         marker_color=RED,
         hovertemplate="<b>%{x}</b><br>Down: %{y:.1f}%<extra></extra>",
     ))
@@ -1129,12 +1468,12 @@ def tab_cycles(tickers):
     # ── Cycle duration ────────────────────────────────────────────────────
     fig_dur = go.Figure()
     fig_dur.add_trace(go.Bar(
-        name="Up Duration (days)", x=cyc["ticker"], y=cyc["up_cycle_duration"],
+        name="Up Duration (days)", x=cyc_sorted["ticker"], y=cyc_sorted["up_cycle_duration"],
         marker_color=GREEN,
         hovertemplate="<b>%{x}</b><br>Up: %{y} days<extra></extra>",
     ))
     fig_dur.add_trace(go.Bar(
-        name="Down Duration (days)", x=cyc["ticker"], y=cyc["down_cycle_duration"],
+        name="Down Duration (days)", x=cyc_sorted["ticker"], y=cyc_sorted["down_cycle_duration"],
         marker_color=RED,
         hovertemplate="<b>%{x}</b><br>Down: %{y} days<extra></extra>",
     ))
@@ -1143,7 +1482,7 @@ def tab_cycles(tickers):
                            barmode="group", height=300)
 
     # ── Volume difference vs last cycle ───────────────────────────────────
-    vol_df = cyc.dropna(subset=["vol_diff_last_cycle"])
+    vol_df = cyc_sorted.dropna(subset=["vol_diff_last_cycle"])
     fig_vol = go.Figure(go.Bar(
         x=vol_df["ticker"], y=vol_df["vol_diff_last_cycle"],
         marker_color=[GREEN if v > 0 else RED for v in vol_df["vol_diff_last_cycle"]],
@@ -1154,28 +1493,38 @@ def tab_cycles(tickers):
                            showlegend=False, height=280)
     fig_vol.add_hline(y=0, line_dash="dash", line_color=SUBTEXT, line_width=1)
 
-    # Summary table
-    tbl_df = cyc[["ticker", "up_cycle_magnitude", "up_cycle_duration",
-                  "down_cycle_magnitude", "down_cycle_duration", "vol_diff_last_cycle"]].copy()
-    for col in ["up_cycle_magnitude", "down_cycle_magnitude", "vol_diff_last_cycle"]:
-        tbl_df[col] = tbl_df[col].map(lambda x: f"{x:+.1f}%" if pd.notna(x) else "—")
-    for col in ["up_cycle_duration", "down_cycle_duration"]:
-        tbl_df[col] = tbl_df[col].map(lambda x: f"{int(x)}d" if pd.notna(x) else "—")
+    # ── Per-ticker cycle price chart ──────────────────────────────────────
+    default_ticker = tickers[0] if tickers else ""
+    initial_fig    = _build_cycle_chart(default_ticker) if default_ticker else go.Figure()
 
-    tbl = dash_table.DataTable(
-        data=tbl_df.to_dict("records"),
-        columns=[{"name": c.replace("_", " ").title(), "id": c} for c in tbl_df.columns],
-        sort_action="native",
-        style_table={"overflowX": "auto"},
-        style_cell={"backgroundColor": BG3, "color": TEXT, "border": "1px solid #30363d",
-                    "fontSize": "13px", "padding": "6px 10px"},
-        style_header={"backgroundColor": BG2, "color": ACCENT, "fontWeight": "600",
-                      "border": "1px solid #30363d"},
-        style_data_conditional=[{"if": {"row_index": "odd"}, "backgroundColor": BG2}],
-    )
+    cycle_chart_section = _card([
+        _section_title("Cycle Price Chart"),
+        html.Div([
+            html.Label("Select ticker:", style={"color": SUBTEXT, "fontSize": "12px",
+                                                 "marginRight": "8px"}),
+            dcc.Dropdown(
+                id="cycles-ticker-select",
+                options=[{"label": t, "value": t} for t in tickers],
+                value=default_ticker,
+                clearable=False,
+                style={"width": "200px", "display": "inline-block",
+                       "backgroundColor": BG3, "color": TEXT,
+                       "border": "1px solid #30363d"},
+            ),
+        ], style={"marginBottom": "10px"}),
+        html.Div([
+            html.Span("🟢 Green shading = up cycle  ", style={"color": GREEN, "fontSize": "12px"}),
+            html.Span("🔴 Red shading = down cycle  ", style={"color": RED, "fontSize": "12px"}),
+            html.Span("▲ Peak  ▼ Trough — % label shows magnitude of each cycle segment",
+                      style={"color": SUBTEXT, "fontSize": "11px"}),
+        ], style={"marginBottom": "8px"}),
+        dcc.Graph(id="cycles-price-chart", figure=initial_fig,
+                  config={"displayModeBar": True}),
+    ])
 
     return html.Div([
         _card([_section_title("Cycle Summary"), tbl]),
+        cycle_chart_section,
         _card(dcc.Graph(figure=fig_mag, config={"displayModeBar": True})),
         dbc.Row([
             dbc.Col(_card(dcc.Graph(figure=fig_dur, config={"displayModeBar": False})), width=7),
@@ -1183,7 +1532,8 @@ def tab_cycles(tickers):
         ]),
         _card(_source_footer("Yahoo Finance / yfinance — scipy.signal.argrelextrema",
                               "Cycle peaks/troughs detected via rolling local extrema "
-                              f"(CYCLE_DETECTION_WINDOW=15 days). Price data from Yahoo Finance.")),
+                              f"(window={_CYCLE_WINDOW} trading days). "
+                              "Volume Δ = current up-cycle avg volume vs prior up-cycle.")),
     ])
 
 
@@ -1203,8 +1553,8 @@ def tab_compare(tickers):
                     html.Label("Period A", style={"color": SUBTEXT, "fontSize": "12px"}),
                     dcc.DatePickerRange(
                         id="cmp-period-a",
-                        start_date=(datetime.today() - timedelta(days=180)).strftime("%Y-%m-%d"),
-                        end_date=(datetime.today() - timedelta(days=91)).strftime("%Y-%m-%d"),
+                        start_date=(_now_hkt() - timedelta(days=180)).strftime("%Y-%m-%d"),
+                        end_date=(_now_hkt() - timedelta(days=91)).strftime("%Y-%m-%d"),
                         display_format="DD MMM YYYY",
                     ),
                 ], width=5),
@@ -1212,8 +1562,8 @@ def tab_compare(tickers):
                     html.Label("Period B", style={"color": SUBTEXT, "fontSize": "12px"}),
                     dcc.DatePickerRange(
                         id="cmp-period-b",
-                        start_date=(datetime.today() - timedelta(days=90)).strftime("%Y-%m-%d"),
-                        end_date=datetime.today().strftime("%Y-%m-%d"),
+                        start_date=(_now_hkt() - timedelta(days=90)).strftime("%Y-%m-%d"),
+                        end_date=_now_hkt().strftime("%Y-%m-%d"),
                         display_format="DD MMM YYYY",
                     ),
                 ], width=5),
@@ -1228,6 +1578,17 @@ def tab_compare(tickers):
         # Pass tickers down via store
         dcc.Store(id="cmp-tickers", data=tickers),
     ])
+
+
+@app.callback(
+    Output("cycles-price-chart", "figure"),
+    Input("cycles-ticker-select", "value"),
+    prevent_initial_call=True,
+)
+def update_cycle_price_chart(ticker):
+    if not ticker:
+        return go.Figure()
+    return _build_cycle_chart(ticker)
 
 
 @app.callback(
@@ -1397,9 +1758,14 @@ def _sc_vs_etf_panel():
         if not model_ids:
             continue
         ph = ",".join("?" * len(model_ids))
+        # Use only curated data for the trend index — PassMark stores a single
+        # data point per crawl (today's date only), which collapses to 1 monthly
+        # bin and breaks the normalisation.  Curated data has multi-year monthly
+        # history and is the intended source for this long-horizon comparison.
         df = query(
             f"SELECT date, price_usd FROM sc_prices "
-            f"WHERE model_id IN ({ph}) AND price_usd IS NOT NULL "
+            f"WHERE model_id IN ({ph}) AND source = 'curated' "
+            f"AND price_usd IS NOT NULL "
             f"ORDER BY date",
             model_ids,
         )
@@ -1793,9 +2159,100 @@ def tab_supply_chain():
 
         # ── PANEL 5 + 6: Manufacturer Capacity & Occupancy ───────────────────
         _sc_capacity_panel(),
+        # Note: DRAM & HBM Spot Prices are now embedded in the RAM sub-tab above
+    ])
 
-        # ── PANEL 7: DRAM Spot Price ──────────────────────────────────────────
-        _sc_dram_panel(),
+
+def _sc_dram_inline() -> html.Div:
+    """DRAM & HBM spot price chart + YoY table — embedded inside the RAM tab."""
+    df = sc_dram_query()
+    if df.empty:
+        return _card(html.P(
+            "DRAM spot price data not yet loaded. Run: python supply_chain_crawler.py",
+            style={"color": SUBTEXT, "fontSize": "12px"},
+        ))
+
+    df["price_usd"] = pd.to_numeric(df["price_usd"], errors="coerce")
+    df = df.sort_values("period")
+
+    DRAM_COLORS = {
+        "DDR4": "#74C0FC", "DDR5": "#51CF66", "HBM3E": "#FF6B6B",
+        "HBM3": "#CC5DE8", "LPDDR5X": "#FFD43B",
+    }
+
+    fig = go.Figure()
+    for ptype, grp in df.groupby("product_type"):
+        for spec, sub in grp.groupby("spec_label"):
+            fig.add_trace(go.Scatter(
+                x=sub["period"], y=sub["price_usd"],
+                name=f"{ptype} — {spec}",
+                mode="lines+markers",
+                line=dict(width=2, color=DRAM_COLORS.get(ptype, ACCENT)),
+                hovertemplate=f"<b>{ptype}</b> {spec}<br>%{{x}}<br>$%{{y:.2f}}/unit<extra></extra>",
+            ))
+    fig.update_layout(
+        **PLOTLY_TEMPLATE["layout"],
+        title="DRAM & HBM Spot / Contract Prices (USD per die / per GB)",
+        height=360, xaxis_title="Month", yaxis_title="Price (USD)",
+        xaxis=dict(
+            rangeselector=dict(
+                bgcolor=BG3, bordercolor="#30363d",
+                buttons=[
+                    dict(count=6,  label="6M", step="month", stepmode="backward"),
+                    dict(count=12, label="1Y", step="month", stepmode="backward"),
+                    dict(count=24, label="2Y", step="month", stepmode="backward"),
+                    dict(step="all", label="All"),
+                ],
+                font=dict(color=TEXT, size=11),
+            ),
+            rangeslider=dict(visible=False),
+            type="date",
+        ),
+    )
+
+    # YoY delta table
+    latest = df.sort_values("period").groupby(["product_type", "spec_label"]).last()
+    prior_df = df[df["period"] <= (pd.to_datetime(df["period"].max()) - pd.DateOffset(months=12))
+                 .strftime("%Y-%m")].groupby(["product_type", "spec_label"])["price_usd"].last()
+    rows_tbl = []
+    for idx, row in latest.iterrows():
+        p_now  = row["price_usd"]
+        p_prev = prior_df.get(idx)
+        yoy    = ((p_now / p_prev - 1) * 100) if p_prev and p_prev > 0 else None
+        rows_tbl.append({
+            "Type": idx[0], "Spec": idx[1], "Period": row["period"],
+            "Spot Price (USD)": f"${p_now:.2f}",
+            "YoY Δ": f"{yoy:+.1f}%" if yoy is not None else "—",
+            "Source": row.get("source", "TrendForce"),
+        })
+    tbl_df = pd.DataFrame(rows_tbl)
+    tbl = dash_table.DataTable(
+        data=tbl_df.to_dict("records"),
+        columns=[{"name": c, "id": c} for c in tbl_df.columns],
+        style_table={"overflowX": "auto"},
+        style_cell={"backgroundColor": BG3, "color": TEXT, "border": "1px solid #30363d",
+                    "fontSize": "13px", "padding": "6px 10px"},
+        style_header={"backgroundColor": BG2, "color": ACCENT, "fontWeight": "600",
+                      "border": "1px solid #30363d"},
+        style_data_conditional=[
+            {"if": {"filter_query": '{YoY Δ} contains "+"', "column_id": "YoY Δ"},
+             "color": GREEN, "fontWeight": "600"},
+            {"if": {"filter_query": '{YoY Δ} contains "-"', "column_id": "YoY Δ"},
+             "color": RED, "fontWeight": "600"},
+            {"if": {"row_index": "odd"}, "backgroundColor": BG2},
+        ],
+    )
+
+    return html.Div([
+        _card(dcc.Graph(figure=fig, config={"displayModeBar": True})),
+        _card([
+            _section_title("DRAM & HBM — Latest Spot Prices & Year-on-Year Change"),
+            tbl,
+            _source_footer("TrendForce / DRAMeXchange",
+                           "DDR4/DDR5: weekly spot benchmark die price (USD). "
+                           "HBM3E: estimated contract price per GB. "
+                           "Update CURATED_DRAM_SPOT in products_config.py monthly."),
+        ]),
     ])
 
 
@@ -1811,7 +2268,7 @@ def _sc_price_section(category: str):
         "Samsung": "#1428A0", "SK Hynix": "#F15A24", "Micron": "#E31837",
     }
 
-    # ── Price history line chart ──────────────────────────────────────────
+    # ── Price history line chart — synced date range with DRAM panel ─────
     # Priority: PassMark historical > Curated (for RAM) > Newegg (bar, fallback)
     df_hist = df_pass if not df_pass.empty else df_curated
     fig_price = go.Figure()
@@ -1826,7 +2283,6 @@ def _sc_price_section(category: str):
                 hovertemplate=f"<b>{short}</b><br>Date: %{{x}}<br>Price: $%{{y:.0f}}<extra></extra>",
             ))
     elif not df_new.empty:
-        # Only Newegg data available — show as bar (snapshot)
         latest = df_new.sort_values("date").groupby("model_id").last().reset_index()
         fig_price.add_trace(go.Bar(
             x=latest["name"] if "name" in latest else latest["model_id"],
@@ -1837,10 +2293,24 @@ def _sc_price_section(category: str):
     fig_price.update_layout(
         **PLOTLY_TEMPLATE["layout"],
         title=f"{cat_label} — Price Index (USD)",
-        height=340, xaxis_title="Date", yaxis_title="Retail Price (USD)",
+        height=360, xaxis_title="Date", yaxis_title="Retail Price (USD)",
+        xaxis=dict(
+            rangeselector=dict(
+                bgcolor=BG3, bordercolor="#30363d",
+                buttons=[
+                    dict(count=6,  label="6M", step="month", stepmode="backward"),
+                    dict(count=12, label="1Y", step="month", stepmode="backward"),
+                    dict(count=24, label="2Y", step="month", stepmode="backward"),
+                    dict(step="all", label="All"),
+                ],
+                font=dict(color=TEXT, size=11),
+            ),
+            rangeslider=dict(visible=False),
+            type="date",
+        ),
     )
 
-    # ── Performance / Price scatter (PassMark score vs price) ────────────
+    # ── Performance / Price scatter ───────────────────────────────────────
     fig_pp = go.Figure()
     if not df_pass.empty:
         latest_pass = df_pass.dropna(subset=["passmark_score", "price_usd"])
@@ -1869,11 +2339,64 @@ def _sc_price_section(category: str):
         yaxis_title="PassMark Score", showlegend=False,
     )
 
+    # ── Latest Prices & Year-on-Year Change table ─────────────────────────
+    yoy_section = html.Span()   # empty by default
+    if not df_hist.empty:
+        # Latest price per product and price ~12 months prior
+        latest_snap = (df_hist.sort_values("date")
+                       .groupby("model_id")
+                       .last()
+                       .reset_index()[["model_id", "date", "price_usd"]])
+        _cutoff_1y = (pd.Timestamp(_now_hkt()) - pd.DateOffset(months=12)).strftime("%Y-%m-%d")
+        hist_1y = (df_hist[df_hist["date"] <= _cutoff_1y]
+                   .sort_values("date")
+                   .groupby("model_id")["price_usd"]
+                   .last()
+                   .rename("price_1y_ago"))
+        yoy_df = latest_snap.merge(
+            df_hist[["model_id", "name"]].drop_duplicates("model_id"),
+            on="model_id", how="left",
+        ).merge(hist_1y, on="model_id", how="left")
+        yoy_df["YoY Δ"] = yoy_df.apply(
+            lambda r: f"{(r['price_usd'] / r['price_1y_ago'] - 1) * 100:+.1f}%"
+                      if pd.notna(r["price_1y_ago"]) and r["price_1y_ago"] > 0 else "—",
+            axis=1,
+        )
+        yoy_df = yoy_df.rename(columns={
+            "name": "Product", "date": "As of",
+            "price_usd": "Latest Price (USD)", "price_1y_ago": "Price 1Y Ago (USD)",
+        })
+        yoy_df["Latest Price (USD)"] = yoy_df["Latest Price (USD)"].map(
+            lambda x: f"${x:,.0f}" if pd.notna(x) else "—")
+        yoy_df["Price 1Y Ago (USD)"] = yoy_df["Price 1Y Ago (USD)"].map(
+            lambda x: f"${x:,.0f}" if pd.notna(x) else "—")
+        yoy_df = yoy_df[["Product", "As of", "Latest Price (USD)",
+                          "Price 1Y Ago (USD)", "YoY Δ"]]
+        yoy_tbl = dash_table.DataTable(
+            data=yoy_df.to_dict("records"),
+            columns=[{"name": c, "id": c} for c in yoy_df.columns],
+            sort_action="native",
+            style_table={"overflowX": "auto"},
+            style_cell={"backgroundColor": BG3, "color": TEXT,
+                        "border": "1px solid #30363d",
+                        "fontSize": "13px", "padding": "6px 10px"},
+            style_header={"backgroundColor": BG2, "color": ACCENT,
+                          "fontWeight": "600", "border": "1px solid #30363d"},
+            style_data_conditional=[
+                {"if": {"row_index": "odd"}, "backgroundColor": BG2},
+                {"if": {"filter_query": '{YoY Δ} contains "+"', "column_id": "YoY Δ"},
+                 "color": GREEN, "fontWeight": "600"},
+                {"if": {"filter_query": '{YoY Δ} contains "-"', "column_id": "YoY Δ"},
+                 "color": RED, "fontWeight": "600"},
+            ],
+        )
+        yoy_section = _card([
+            _section_title(f"{cat_label} — Latest Prices & Year-on-Year Change"),
+            yoy_tbl,
+        ])
+
     # ── In-stock / Estimated Delivery table (Newegg) ─────────────────────
-    delivery_section = _card(html.P(
-        "Run supply_chain_crawler.py to fetch live Newegg availability data.",
-        style={"color": SUBTEXT, "fontSize": "12px"}
-    ))
+    delivery_section = html.Span()  # hidden if no Newegg data
     if not df_new.empty:
         latest_new = df_new.sort_values("date").groupby("model_id").last().reset_index()
         latest_new["Status"]  = latest_new["in_stock"].map(
@@ -1892,10 +2415,8 @@ def _sc_price_section(category: str):
             style_header={"backgroundColor": BG2, "color": ACCENT, "fontWeight": "600",
                           "border": "1px solid #30363d"},
             style_data_conditional=[
-                {"if": {"filter_query": '{Status} contains "In Stock"'},
-                 "color": GREEN},
-                {"if": {"filter_query": '{Status} contains "Out of Stock"'},
-                 "color": RED},
+                {"if": {"filter_query": '{Status} contains "In Stock"'}, "color": GREEN},
+                {"if": {"filter_query": '{Status} contains "Out of Stock"'}, "color": RED},
             ],
         )
         delivery_section = _card([
@@ -1903,19 +2424,26 @@ def _sc_price_section(category: str):
             tbl,
         ])
 
+    # ── For RAM: embed DRAM & HBM spot prices inline ──────────────────────
+    dram_section = html.Span()
+    if category == "RAM":
+        dram_section = _sc_dram_inline()
+
     return html.Div([
         dbc.Row([
             dbc.Col(_card(dcc.Graph(figure=fig_price, config={"displayModeBar": True})), width=7),
             dbc.Col(_card(dcc.Graph(figure=fig_pp,    config={"displayModeBar": True})), width=5),
         ]),
+        yoy_section,
+        dram_section,
         delivery_section,
         _card(_source_footer(
-            f"PassMark Performance Test / Newegg / Curated Market Data",
-            f"Price history: PassMark benchmark database (GPU/CPU) or curated retail pricing (RAM / supplemental). "
-            f"Performance/Price scatter: PassMark Score vs retail USD. "
-            f"Stock status: Newegg live listing. "
-            f"Curated data: monthly retail averages from 2023-01 to 2025-04. "
-            f"Run supply_chain_crawler.py to refresh.",
+            "PassMark Performance Test / Newegg / TrendForce / Curated Market Data",
+            "Price history: PassMark benchmark database (GPU/CPU) or curated retail pricing. "
+            "YoY: latest vs same month prior year. "
+            "Performance/Price scatter: PassMark Score vs retail USD. "
+            "Stock status: Newegg live listing. "
+            "Run supply_chain_crawler.py to refresh.",
         )),
     ])
 
@@ -2358,7 +2886,7 @@ def upload_iv():
         except Exception:
             pass
 
-        now_str = datetime.utcnow().strftime("%Y-%m-%d")
+        now_str = _now_hkt().strftime("%Y-%m-%d")
         cur = conn.cursor()
         for s in snapshots:
             ticker        = s.get("ticker", "")

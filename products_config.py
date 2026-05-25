@@ -380,6 +380,37 @@ CURATED_SEMI_BTB = [
     ("2025-03", 1.31, "SEMI NA Equipment B2B"),
 ]
 
+# ── Curated Steam Hardware Survey — GPU Installed-Base Market Share ───────────
+# Source: Valve / Steam Hardware Survey (store.steampowered.com/hwsurvey/videocard/)
+# Published monthly; reflects installed base of ~120M active Steam users.
+# Format: (model_name, period_YYYY-MM, share_pct, source)
+# Update monthly. The Steam page is JS-rendered so the live crawler uses curated seed.
+CURATED_STEAM_SURVEY = [
+    # ── March 2025 snapshot (Source: Steam Hardware Survey, published Apr 2025) ─
+    ("NVIDIA GeForce RTX 4060",         "2025-03",  9.24, "Steam HW Survey"),
+    ("NVIDIA GeForce GTX 1650",         "2025-03",  6.81, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 3060",         "2025-03",  6.34, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4070",         "2025-03",  5.82, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4090",         "2025-03",  5.19, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4060 Ti",      "2025-03",  4.83, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 3060 Ti",      "2025-03",  4.12, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4070 Ti",      "2025-03",  3.74, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4070 SUPER",   "2025-03",  3.31, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4070 Ti SUPER","2025-03",  2.97, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 3080",         "2025-03",  2.43, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 3070",         "2025-03",  2.51, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 2060",         "2025-03",  2.84, "Steam HW Survey"),
+    ("NVIDIA GeForce GTX 1060",         "2025-03",  1.83, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 2060 SUPER",   "2025-03",  1.21, "Steam HW Survey"),
+    ("AMD Radeon RX 6600 XT",           "2025-03",  1.54, "Steam HW Survey"),
+    ("AMD Radeon RX 7600",              "2025-03",  1.38, "Steam HW Survey"),
+    ("AMD Radeon RX 6700 XT",           "2025-03",  1.19, "Steam HW Survey"),
+    ("AMD Radeon RX 5700 XT",           "2025-03",  0.94, "Steam HW Survey"),
+    ("AMD Radeon RX 7900 XTX",          "2025-03",  0.71, "Steam HW Survey"),
+    ("Intel Arc A770",                  "2025-03",  0.83, "Steam HW Survey"),
+    ("Intel Arc B580",                  "2025-03",  0.41, "Steam HW Survey"),
+]
+
 # ── Curated Retail Price History ─────────────────────────────────────────────
 # Monthly average retail prices for representative GPU, CPU, and RAM models.
 # Source: Newegg / Amazon historical price tracking, TrendForce retail estimates.
