@@ -689,8 +689,6 @@ def tab_overview(tickers, start, end):
         hovermode="x unified",
         barmode="overlay",
         bargap=0.1,
-        # subplot_titles styling
-        font=dict(color=TEXT),
     )
     # Shared x-axis lives on xaxis (row 1); xaxis2 (row 2) inherits the range
     fig_price.update_xaxes(
@@ -2194,20 +2192,20 @@ def _sc_dram_inline() -> html.Div:
         **PLOTLY_TEMPLATE["layout"],
         title="DRAM & HBM Spot / Contract Prices (USD per die / per GB)",
         height=360, xaxis_title="Month", yaxis_title="Price (USD)",
-        xaxis=dict(
-            rangeselector=dict(
-                bgcolor=BG3, bordercolor="#30363d",
-                buttons=[
-                    dict(count=6,  label="6M", step="month", stepmode="backward"),
-                    dict(count=12, label="1Y", step="month", stepmode="backward"),
-                    dict(count=24, label="2Y", step="month", stepmode="backward"),
-                    dict(step="all", label="All"),
-                ],
-                font=dict(color=TEXT, size=11),
-            ),
-            rangeslider=dict(visible=False),
-            type="date",
+    )
+    fig.update_xaxes(
+        rangeselector=dict(
+            bgcolor=BG3, bordercolor="#30363d",
+            buttons=[
+                dict(count=6,  label="6M", step="month", stepmode="backward"),
+                dict(count=12, label="1Y", step="month", stepmode="backward"),
+                dict(count=24, label="2Y", step="month", stepmode="backward"),
+                dict(step="all", label="All"),
+            ],
+            font=dict(color=TEXT, size=11),
         ),
+        rangeslider=dict(visible=False),
+        type="date",
     )
 
     # YoY delta table
@@ -2294,20 +2292,20 @@ def _sc_price_section(category: str):
         **PLOTLY_TEMPLATE["layout"],
         title=f"{cat_label} — Price Index (USD)",
         height=360, xaxis_title="Date", yaxis_title="Retail Price (USD)",
-        xaxis=dict(
-            rangeselector=dict(
-                bgcolor=BG3, bordercolor="#30363d",
-                buttons=[
-                    dict(count=6,  label="6M", step="month", stepmode="backward"),
-                    dict(count=12, label="1Y", step="month", stepmode="backward"),
-                    dict(count=24, label="2Y", step="month", stepmode="backward"),
-                    dict(step="all", label="All"),
-                ],
-                font=dict(color=TEXT, size=11),
-            ),
-            rangeslider=dict(visible=False),
-            type="date",
+    )
+    fig_price.update_xaxes(
+        rangeselector=dict(
+            bgcolor=BG3, bordercolor="#30363d",
+            buttons=[
+                dict(count=6,  label="6M", step="month", stepmode="backward"),
+                dict(count=12, label="1Y", step="month", stepmode="backward"),
+                dict(count=24, label="2Y", step="month", stepmode="backward"),
+                dict(step="all", label="All"),
+            ],
+            font=dict(color=TEXT, size=11),
         ),
+        rangeslider=dict(visible=False),
+        type="date",
     )
 
     # ── Performance / Price scatter ───────────────────────────────────────
