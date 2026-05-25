@@ -219,6 +219,32 @@ def _source_footer(source_name: str, notes: str = "") -> html.Div:
     })
 
 
+def _time_rangeselector(active_index: int = 0) -> dict:
+    """Standard 1Y / 3Y / 5Y Plotly rangeselector.
+    Buttons are anchored relative to today (stepmode='backward') so they always
+    show the correct window regardless of when the dashboard is opened.
+    active_index: 0=1Y selected by default, 1=3Y, 2=5Y.
+    """
+    return dict(
+        buttons=[
+            dict(count=1, label="1Y", step="year", stepmode="backward"),
+            dict(count=3, label="3Y", step="year", stepmode="backward"),
+            dict(count=5, label="5Y", step="year", stepmode="backward"),
+        ],
+        active=active_index,
+        activecolor=ACCENT,
+        bgcolor=BG2,
+        bordercolor="#30363d",
+        borderwidth=1,
+        font=dict(color=TEXT, size=11),
+    )
+
+
+def _range_start(years: int = 1) -> str:
+    """Return ISO date string for `years` years before today (system time)."""
+    return (_now_hkt() - timedelta(days=365 * years)).strftime("%Y-%m-%d")
+
+
 def ticker_checklist(group_name: str, tickers: list[str], default_checked: list[str]):
     return html.Div([
         _section_title(group_name),
@@ -371,7 +397,7 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
                 SEMI_COMPANIES,
                 ["NVDA", "AMD", "ASML", "AVGO", "QCOM", "MU", "TSM", "INTC"],
             ),
-            ticker_checklist("Semi ETFs",   SEMI_ETFS,   ["SMH"]),
+            ticker_checklist("Semi ETFs",   SEMI_ETFS,   ["SMH", "SOXX"]),
             ticker_checklist("Macro / Other",
                 ["TQQQ", "QQQ", "VIX", "USD", "10YTreasury", "Gold", "BTC", "ETH"],
                 ["VIX", "10YTreasury", "Gold"],
@@ -390,7 +416,8 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
 
             # Hidden store for selected tickers
             dcc.Store(id="selected-tickers", data=[
-                "NVDA", "AMD", "ASML", "AVGO", "QCOM", "MU", "TSM", "INTC", "SMH", "VIX", "10YTreasury"
+                "NVDA", "AMD", "ASML", "AVGO", "QCOM", "MU", "TSM", "INTC",
+                "SMH", "SOXX", "VIX", "10YTreasury"
             ]),
         ]),
 
@@ -421,6 +448,8 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
     dcc.Interval(id="status-interval", interval=30_000, n_intervals=0),
     # Store for crawl-job state (polled by status-interval)
     dcc.Store(id="crawl-job-store", data={"running": False, "message": ""}),
+    # Store for Financials tab period selection (1 / 3 / 5 years); default = 3
+    dcc.Store(id="fin-period-store", data=3),
 ])
 
 
@@ -530,6 +559,17 @@ _crawl_running: dict = {"active": False}
 
 
 @app.callback(
+    Output("fin-period-store", "data"),
+    Input("fin-period-radio",  "value"),
+    prevent_initial_call=True,
+)
+def update_fin_period(value):
+    """Persist Financials period-selector (1Y / 3Y / 5Y) to global store
+    so the selection survives tab switches."""
+    return int(value) if value else 3
+
+
+@app.callback(
     Output("ibkr-status-badge", "children"),
     Input("status-interval", "n_intervals"),
 )
@@ -577,17 +617,19 @@ def update_ibkr_badge(_):
     Input("date-range",       "start_date"),
     Input("date-range",       "end_date"),
     Input("btn-refresh",      "n_clicks"),
+    Input("fin-period-store", "data"),
 )
-def render_tab(active_tab, tickers, start_date, end_date, _refresh):
+def render_tab(active_tab, tickers, start_date, end_date, _refresh, fin_period):
     if not tickers:
         return _card(html.P("Select at least one ticker from the sidebar.", style={"color": SUBTEXT}))
 
-    start = start_date[:10] if start_date else "2023-01-01"
-    end   = end_date[:10]   if end_date   else _now_hkt().strftime("%Y-%m-%d")
+    start      = start_date[:10] if start_date else "2023-01-01"
+    end        = end_date[:10]   if end_date   else _now_hkt().strftime("%Y-%m-%d")
+    fin_period = int(fin_period) if fin_period else 3
 
     _TAB_MAP = {
         "tab-overview":     lambda: tab_overview(tickers, start, end),
-        "tab-financials":   lambda: tab_financials(tickers),
+        "tab-financials":   lambda: tab_financials(tickers, fin_period),
         "tab-sentiment":    lambda: tab_sentiment(tickers),
         "tab-cycles":       lambda: tab_cycles(tickers),
         "tab-compare":      lambda: tab_compare(tickers),
@@ -762,7 +804,13 @@ def tab_overview(tickers, start, end):
 # TAB 2 — FINANCIALS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def tab_financials(tickers):
+def tab_financials(tickers, period_years: int = 3):
+    """Render the Financials tab.
+
+    period_years — how many years of quarterly data to display (1, 3, or 5).
+    Controlled by the dcc.RadioItems at the top of this tab; persisted in
+    fin-period-store so the selection survives tab switches.
+    """
     df = financials_data(tickers)
     if df.empty:
         return _card(html.P("No quarterly financial data. Run crawler.py — financials are only available for listed companies.", style={"color": SUBTEXT}))
@@ -770,46 +818,79 @@ def tab_financials(tickers):
     df["period_end"] = pd.to_datetime(df["period_end"])
     df = df.sort_values("period_end")
 
-    # ── Limit all comparison charts to the last 3 years (12 quarters) ────────
-    _cutoff_3y = pd.Timestamp(_now_hkt() - timedelta(days=365 * 3))
-    df = df[df["period_end"] >= _cutoff_3y]
+    # Always fetch up to 5 years so switching to 5Y works without a new DB query.
+    _cutoff_5y = pd.Timestamp(_now_hkt() - timedelta(days=365 * 5))
+    df = df[df["period_end"] >= _cutoff_5y]
 
-    def metric_chart(col: str, title: str, pct: bool = False, yformat: str = "$,.0f"):
+    # Apply the user-selected period window
+    _cutoff_sel = pd.Timestamp(_now_hkt() - timedelta(days=365 * period_years))
+    df_view = df[df["period_end"] >= _cutoff_sel]
+
+    # Quarterly label used as categorical x-axis — evenly-spaced bars regardless
+    # of how many tickers are grouped.
+    def _qlabel(ts) -> str:
+        return f"{ts.year}-Q{ts.quarter}"
+
+    # ── Period selector widget ────────────────────────────────────────────────
+    period_selector = html.Div([
+        html.Span("Period: ", style={"color": SUBTEXT, "fontSize": "12px",
+                                     "marginRight": "8px", "fontWeight": "600"}),
+        dbc.RadioItems(
+            id="fin-period-radio",
+            options=[
+                {"label": "1 Year",  "value": 1},
+                {"label": "3 Years", "value": 3},
+                {"label": "5 Years", "value": 5},
+            ],
+            value=period_years,
+            inline=True,
+            inputStyle={"marginRight": "4px", "accentColor": ACCENT},
+            labelStyle={"marginRight": "16px", "fontSize": "13px", "color": TEXT,
+                        "cursor": "pointer"},
+        ),
+    ], style={"display": "flex", "alignItems": "center", "marginBottom": "12px",
+              "padding": "8px 12px", "background": BG3, "borderRadius": "6px",
+              "border": "1px solid #30363d"})
+
+    def metric_chart(col: str, title: str, pct: bool = False):
         fig = go.Figure()
         for i, tkr in enumerate(tickers):
-            sub = df[df["ticker"] == tkr].dropna(subset=[col])
+            sub = df_view[df_view["ticker"] == tkr].dropna(subset=[col])
             if sub.empty:
                 continue
-            vals = sub[col] / 1e9 if not pct else sub[col]
+            vals  = sub[col] / 1e9 if not pct else sub[col]
+            xlbls = sub["period_end"].apply(_qlabel)
             fig.add_trace(go.Bar(
-                x=sub["period_end"].dt.strftime("%Y-Q%q"),
-                y=vals, name=tkr,
+                x=xlbls, y=vals, name=tkr,
                 marker_color=CHART_COLORS[i % len(CHART_COLORS)],
-                hovertemplate=f"<b>{tkr}</b><br>%{{x}}<br>{title}: %{{y:{',.1f' if pct else ',.2f'}}}" +
-                              ("%" if pct else "B") + "<extra></extra>",
+                hovertemplate=f"<b>{tkr}</b><br>%{{x}}<br>{title}: %{{y:{',.1f' if pct else ',.2f'}}}"
+                              + ("%" if pct else "B") + "<extra></extra>",
             ))
         suffix = "%" if pct else " (USD Billions)"
-        fig.update_layout(**PLOTLY_TEMPLATE["layout"],
-                           title=title + suffix, barmode="group",
-                           height=320, yaxis_title=title)
+        fig.update_layout(
+            **PLOTLY_TEMPLATE["layout"],
+            title=title + suffix, barmode="group",
+            height=320, yaxis_title=title,
+        )
         return dcc.Graph(figure=fig, config={"displayModeBar": False})
 
     def trend_chart(col: str, title: str, pct: bool = False):
         fig = go.Figure()
         for i, tkr in enumerate(tickers):
-            sub = df[df["ticker"] == tkr].dropna(subset=[col])
+            sub = df_view[df_view["ticker"] == tkr].dropna(subset=[col])
             if sub.empty:
                 continue
-            vals = sub[col]
+            xlbls = sub["period_end"].apply(_qlabel)
             fig.add_trace(go.Scatter(
-                x=sub["period_end"].dt.strftime("%Y-Q%q"),
-                y=vals, name=tkr, mode="lines+markers",
+                x=xlbls, y=sub[col], name=tkr, mode="lines+markers",
                 line=dict(width=2, color=CHART_COLORS[i % len(CHART_COLORS)]),
                 hovertemplate=f"<b>{tkr}</b><br>%{{x}}<br>{title}: %{{y:.2f}}{'%' if pct else ''}<extra></extra>",
             ))
-        fig.update_layout(**PLOTLY_TEMPLATE["layout"],
-                           title=title + (" (%)" if pct else ""),
-                           height=280)
+        fig.update_layout(
+            **PLOTLY_TEMPLATE["layout"],
+            title=title + (" (%)" if pct else ""),
+            height=280,
+        )
         return dcc.Graph(figure=fig, config={"displayModeBar": False})
 
     # Latest financials table
@@ -843,7 +924,10 @@ def tab_financials(tickers):
         page_size=20,
     )
 
+    period_label = {1: "1 Year", 3: "3 Years", 5: "5 Years"}.get(period_years, f"{period_years} Years")
     return html.Div([
+        # ── Period selector (1Y / 3Y / 5Y) ───────────────────────────────
+        period_selector,
         _card([_section_title("Latest Quarter Summary"), tbl]),
         dbc.Row([
             dbc.Col(_card(metric_chart("revenue",        "Revenue")),        width=6),
@@ -867,9 +951,9 @@ def tab_financials(tickers):
             dbc.Col(_card(trend_chart("inventory_turnover", "Inventory Turnover")),           width=6),
         ]),
         _card(_source_footer("Yahoo Finance / yfinance",
-                              "Quarterly financials sourced from SEC EDGAR filings via yfinance. "
-                              "Charts show last 3 years (≤12 quarters). "
-                              "Revenue, profit, margins, R&D, AR and inventory turnover ratios.")),
+                              f"Quarterly financials sourced from SEC EDGAR filings via yfinance. "
+                              f"Showing last {period_label} of data — switch with the 1Y / 3Y / 5Y selector above. "
+                              f"Revenue, profit, margins, R&D, AR and inventory turnover ratios.")),
     ])
 
 
@@ -1011,9 +1095,15 @@ def tab_sentiment(tickers):
                 ))
         fig_ivh.update_layout(
             **PLOTLY_TEMPLATE["layout"],
-            title="Daily Implied Volatility History — 1 Year (IBKR)",
+            title="Daily Implied Volatility History (IBKR)",
             height=340, xaxis_title="Date", yaxis_title="IV (%)",
             hovermode="x unified",
+        )
+        fig_ivh.update_xaxes(
+            type="date",
+            rangeselector=_time_rangeselector(active_index=0),   # 1Y default
+            range=[_range_start(1), _now_hkt().strftime("%Y-%m-%d")],
+            rangeslider=dict(visible=False),
         )
 
         # ── A4: IV snapshot table ─────────────────────────────────────────
@@ -1286,8 +1376,11 @@ _CYCLE_WINDOW = 15   # trading days — matches crawler.py CYCLE_DETECTION_WINDO
 
 
 def _build_cycle_chart(ticker: str) -> go.Figure:
-    """Return a Plotly figure: price line + green/red shading per cycle segment."""
-    cutoff = (_now_hkt() - timedelta(days=365 * 2)).strftime("%Y-%m-%d")
+    """Return a Plotly figure: price line + green/red shading per cycle segment.
+    Fetches up to 5 years of data; rangeselector lets user switch 1Y/3Y/5Y view.
+    """
+    # Fetch 5 years so the 5Y button is fully populated
+    cutoff = (_now_hkt() - timedelta(days=365 * 5)).strftime("%Y-%m-%d")
     df = query(
         "SELECT date, close FROM daily_prices WHERE ticker=? AND date>=? ORDER BY date",
         [ticker, cutoff],
@@ -1377,6 +1470,15 @@ def _build_cycle_chart(ticker: str) -> go.Figure:
                         line=dict(width=1, color=BG3)),
             hovertemplate="<b>Trough</b>  $%{y:,.2f}<extra></extra>",
         ))
+
+    # 1Y / 3Y / 5Y rangeselector — default view is 2Y so full context is visible
+    _cyc_today = _now_hkt().strftime("%Y-%m-%d")
+    fig.update_xaxes(
+        type="date",
+        rangeselector=_time_rangeselector(active_index=1),   # 3Y default
+        range=[_range_start(2), _cyc_today],
+        rangeslider=dict(visible=False),
+    )
 
     return fig
 
@@ -1756,13 +1858,14 @@ def _sc_vs_etf_panel():
         if not model_ids:
             continue
         ph = ",".join("?" * len(model_ids))
-        # Use only curated data for the trend index — PassMark stores a single
-        # data point per crawl (today's date only), which collapses to 1 monthly
-        # bin and breaks the normalisation.  Curated data has multi-year monthly
-        # history and is the intended source for this long-horizon comparison.
+        # Include all sources (curated + passmark + newegg) so that each
+        # crawler run automatically extends the index with the latest data point.
+        # Monthly resampling (mean) handles multi-source overlap gracefully:
+        # curated rows provide the historical backbone; live crawl rows extend
+        # the rightmost bin each time the crawler runs.
         df = query(
             f"SELECT date, price_usd FROM sc_prices "
-            f"WHERE model_id IN ({ph}) AND source = 'curated' "
+            f"WHERE model_id IN ({ph}) "
             f"AND price_usd IS NOT NULL "
             f"ORDER BY date",
             model_ids,
@@ -1889,6 +1992,12 @@ def _sc_vs_etf_panel():
         hovermode="x unified",
     )
     fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    fig.update_xaxes(
+        type="date",
+        rangeselector=_time_rangeselector(active_index=0),   # 1Y default
+        range=[_range_start(1), _now_hkt().strftime("%Y-%m-%d")],
+        rangeslider=dict(visible=False),
+    )
 
     # ── 6. Rolling 3-month correlation bar chart (GPU / CPU / RAM vs ETF) ────
     corr_cards = []
@@ -1979,6 +2088,12 @@ def _sc_vs_etf_panel():
                 hovermode="x unified",
             )
             fig_roll.update_yaxes(range=[-1.05, 1.05])
+            fig_roll.update_xaxes(
+                type="date",
+                rangeselector=_time_rangeselector(active_index=0),   # 1Y default
+                range=[_range_start(1), _now_hkt().strftime("%Y-%m-%d")],
+                rangeslider=dict(visible=False),
+            )
         else:
             fig_roll = None
 
@@ -2070,7 +2185,15 @@ def _sc_vs_etf_panel():
     if snapshot_tbl is not None:
         children += [
             html.Div(style={"marginTop": "8px"}),
-            _section_title("Latest Monthly Snapshot — Price & ETF"),
+            _section_title("Category-Level Monthly Avg Price & ETF Snapshot"),
+            html.P(
+                "This table shows the category-level average retail price (GPU, CPU, RAM) "
+                "and ETF close for the most recent month — each row is the mean across "
+                "all tracked models in that category. "
+                "This is distinct from the 'Product Category — Price Index & Availability' "
+                "panel above, which shows individual model-level prices and stock status.",
+                style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "8px"},
+            ),
             snapshot_tbl,
         ]
 
@@ -2178,34 +2301,39 @@ def _sc_dram_inline() -> html.Div:
         "HBM3": "#CC5DE8", "LPDDR5X": "#FFD43B",
     }
 
+    # Unit label per product type:
+    #   DDR4 / DDR5  → price is per benchmark die (USD/die)
+    #   HBM3 / HBM3E → price is per GB of stack capacity (USD/GB)
+    _UNIT_LABEL = {
+        "DDR4": "$/die", "DDR5": "$/die",
+        "HBM3": "$/GB",  "HBM3E": "$/GB",
+        "LPDDR5X": "$/die",
+    }
+
     fig = go.Figure()
     for ptype, grp in df.groupby("product_type"):
+        unit = _UNIT_LABEL.get(ptype, "USD")
         for spec, sub in grp.groupby("spec_label"):
             fig.add_trace(go.Scatter(
                 x=sub["period"], y=sub["price_usd"],
                 name=f"{ptype} — {spec}",
                 mode="lines+markers",
                 line=dict(width=2, color=DRAM_COLORS.get(ptype, ACCENT)),
-                hovertemplate=f"<b>{ptype}</b> {spec}<br>%{{x}}<br>$%{{y:.2f}}/unit<extra></extra>",
+                hovertemplate=(
+                    f"<b>{ptype}</b> {spec}<br>"
+                    f"%{{x}}<br>${{y:.2f}} {unit}<extra></extra>"
+                ),
             ))
     fig.update_layout(
         **PLOTLY_TEMPLATE["layout"],
-        title="DRAM & HBM Spot / Contract Prices (USD per die / per GB)",
+        title="DRAM & HBM Spot / Contract Prices — DDR4/DDR5 (USD/die) · HBM3E (USD/GB)",
         height=360, xaxis_title="Month", yaxis_title="Price (USD)",
     )
     fig.update_xaxes(
-        rangeselector=dict(
-            bgcolor=BG3, bordercolor="#30363d",
-            buttons=[
-                dict(count=6,  label="6M", step="month", stepmode="backward"),
-                dict(count=12, label="1Y", step="month", stepmode="backward"),
-                dict(count=24, label="2Y", step="month", stepmode="backward"),
-                dict(step="all", label="All"),
-            ],
-            font=dict(color=TEXT, size=11),
-        ),
-        rangeslider=dict(visible=False),
         type="date",
+        rangeselector=_time_rangeselector(active_index=0),   # 1Y default
+        range=[_range_start(1), _now_hkt().strftime("%Y-%m-%d")],
+        rangeslider=dict(visible=False),
     )
 
     # YoY delta table
@@ -2241,14 +2369,33 @@ def _sc_dram_inline() -> html.Div:
         ],
     )
 
+    dram_note = html.P(
+        "This chart tracks two distinct pricing layers of the memory market. "
+        "DDR4 (8Gb die) and DDR5 (16Gb die) are quoted in USD per benchmark die — "
+        "the single bare chip that OEMs solder onto a DIMM; these prices move with "
+        "consumer PC demand and inventory cycles. "
+        "HBM3E is quoted in USD per GB of stack capacity — a contract price "
+        "negotiated between SK Hynix / Samsung / Micron and hyperscalers such as "
+        "NVIDIA and Google; it reflects AI accelerator supply tightness rather than "
+        "consumer demand. Because the two series use different units they should be "
+        "read independently — focus on the direction and rate of change for each, "
+        "not on comparing absolute levels across series.",
+        style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "10px"},
+    )
+
     return html.Div([
-        _card(dcc.Graph(figure=fig, config={"displayModeBar": True})),
+        _card([
+            _section_title("DRAM & HBM Spot / Contract Prices"),
+            dram_note,
+            dcc.Graph(figure=fig, config={"displayModeBar": True}),
+        ]),
         _card([
             _section_title("DRAM & HBM — Latest Spot Prices & Year-on-Year Change"),
             tbl,
             _source_footer("TrendForce / DRAMeXchange",
-                           "DDR4/DDR5: weekly spot benchmark die price (USD). "
-                           "HBM3E: estimated contract price per GB. "
+                           "DDR4 8Gb 1Gx8 & DDR5 16Gb 2Gx8: weekly spot benchmark die price (USD/die). "
+                           "HBM3E 12-Hi: estimated contract price per GB of stack capacity (USD/GB). "
+                           "⚠ DDR4/DDR5 and HBM3E use different units — do not compare absolute levels across series. "
                            "Update CURATED_DRAM_SPOT in products_config.py monthly."),
         ]),
     ])
@@ -2294,18 +2441,10 @@ def _sc_price_section(category: str):
         height=360, xaxis_title="Date", yaxis_title="Retail Price (USD)",
     )
     fig_price.update_xaxes(
-        rangeselector=dict(
-            bgcolor=BG3, bordercolor="#30363d",
-            buttons=[
-                dict(count=6,  label="6M", step="month", stepmode="backward"),
-                dict(count=12, label="1Y", step="month", stepmode="backward"),
-                dict(count=24, label="2Y", step="month", stepmode="backward"),
-                dict(step="all", label="All"),
-            ],
-            font=dict(color=TEXT, size=11),
-        ),
-        rangeslider=dict(visible=False),
         type="date",
+        rangeselector=_time_rangeselector(active_index=0),   # 1Y default
+        range=[_range_start(1), _now_hkt().strftime("%Y-%m-%d")],
+        rangeslider=dict(visible=False),
     )
 
     # ── Performance / Price scatter ───────────────────────────────────────
@@ -2752,21 +2891,30 @@ def _sc_dram_panel():
         "DDR4": "#74C0FC", "DDR5": "#51CF66", "HBM3E": "#FF6B6B",
         "HBM3": "#CC5DE8", "LPDDR5X": "#FFD43B",
     }
+    _UNIT_LABEL = {
+        "DDR4": "$/die", "DDR5": "$/die",
+        "HBM3": "$/GB",  "HBM3E": "$/GB",
+        "LPDDR5X": "$/die",
+    }
 
     fig = go.Figure()
     for ptype, grp in df.groupby("product_type"):
+        unit = _UNIT_LABEL.get(ptype, "USD")
         for spec, sub in grp.groupby("spec_label"):
             fig.add_trace(go.Scatter(
                 x=sub["period"], y=sub["price_usd"],
                 name=f"{ptype} — {spec}",
                 mode="lines+markers",
                 line=dict(width=2, color=DRAM_COLORS.get(ptype, ACCENT)),
-                hovertemplate=f"<b>{ptype}</b> {spec}<br>%{{x}}<br>$%{{y:.2f}}/unit<extra></extra>",
+                hovertemplate=(
+                    f"<b>{ptype}</b> {spec}<br>"
+                    f"%{{x}}<br>${{y:.2f}} {unit}<extra></extra>"
+                ),
             ))
 
     fig.update_layout(
         **PLOTLY_TEMPLATE["layout"],
-        title="RAM Memory — DRAM & HBM Spot / Contract Prices (USD per die / per GB)",
+        title="RAM Memory — DRAM & HBM Spot / Contract Prices — DDR4/DDR5 (USD/die) · HBM3E (USD/GB)",
         height=380, xaxis_title="Month", yaxis_title="Price (USD)",
     )
 
@@ -2803,13 +2951,21 @@ def _sc_dram_panel():
 
     return _card([
         _section_title("RAM Memory — DRAM & HBM Spot Prices"),
+        html.P(
+            "DDR4 (8Gb die) and DDR5 (16Gb die) prices are quoted in USD per benchmark die. "
+            "HBM3E is quoted in USD per GB of stack capacity — a hyperscaler contract price "
+            "driven by AI accelerator demand (NVIDIA H100/H200/B200). "
+            "⚠ The two series use different units; compare trends within a series, "
+            "not absolute levels across series.",
+            style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "10px"},
+        ),
         dcc.Graph(figure=fig, config={"displayModeBar": True}),
         html.Div(style={"marginTop": "12px"}),
         _section_title("Latest Prices & Year-on-Year Change"),
         tbl,
         _source_footer("TrendForce / DRAMeXchange",
-                       "DDR4/DDR5: weekly spot benchmark die price (USD). "
-                       "HBM3E: estimated contract price per GB. "
+                       "DDR4 8Gb 1Gx8 & DDR5 16Gb 2Gx8: weekly spot benchmark die price (USD/die). "
+                       "HBM3E 12-Hi: estimated contract price per GB of stack capacity (USD/GB). "
                        "Update CURATED_DRAM_SPOT in products_config.py monthly."),
     ])
 

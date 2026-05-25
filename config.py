@@ -79,7 +79,7 @@ SEMI_COMPANIES = [
 ]
 
 # Semi-focused ETFs
-SEMI_ETFS = ["SOXL", "SOXS", "SMH"]
+SEMI_ETFS = ["SOXL", "SOXS", "SMH", "SOXX"]
 
 # ── Database ──────────────────────────────────────────────────────────────────
 # On cloud: set DB_PATH env var to point at a persistent-volume mount, e.g.

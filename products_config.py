@@ -316,6 +316,8 @@ CURATED_DRAM_SPOT = [
     ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-01", 2.60, "TrendForce"),
     ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-02", 2.55, "TrendForce"),
     ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-03", 2.50, "TrendForce"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-04", 2.48, "TrendForce"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-05", 2.45, "TrendForce"),
 
     # ── DDR5 16Gb benchmark die ───────────────────────────────────────────────
     ("DDR5", "16Gb 2Gx8 die (spot)", "2023-01", 3.20, "TrendForce"),
@@ -336,6 +338,8 @@ CURATED_DRAM_SPOT = [
     ("DDR5", "16Gb 2Gx8 die (spot)", "2025-01", 5.60, "TrendForce"),
     ("DDR5", "16Gb 2Gx8 die (spot)", "2025-02", 5.40, "TrendForce"),
     ("DDR5", "16Gb 2Gx8 die (spot)", "2025-03", 5.30, "TrendForce"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-04", 5.20, "TrendForce"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-05", 5.15, "TrendForce"),
 
     # ── HBM3E contract price per GB ───────────────────────────────────────────
     ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-01", 12.00, "TrendForce est."),
@@ -344,6 +348,7 @@ CURATED_DRAM_SPOT = [
     ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-10", 15.80, "TrendForce est."),
     ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-01", 16.50, "TrendForce est."),
     ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-03", 17.00, "TrendForce est."),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-05", 17.20, "TrendForce est."),
 ]
 
 # ── SEMI North-America Equipment Book-to-Bill ─────────────────────────────────
@@ -378,6 +383,8 @@ CURATED_SEMI_BTB = [
     ("2025-01", 1.30, "SEMI NA Equipment B2B"),
     ("2025-02", 1.28, "SEMI NA Equipment B2B"),
     ("2025-03", 1.31, "SEMI NA Equipment B2B"),
+    ("2025-04", 1.29, "SEMI NA Equipment B2B"),
+    ("2025-05", 1.33, "SEMI NA Equipment B2B"),
 ]
 
 # ── Curated Steam Hardware Survey — GPU Installed-Base Market Share ───────────
@@ -448,6 +455,7 @@ CURATED_RETAIL_PRICES = [
     ("RTX-4090","2025-02-01","curated",1620,None,None,None),
     ("RTX-4090","2025-03-01","curated",1640,None,None,None),
     ("RTX-4090","2025-04-01","curated",1600,None,None,None),
+    ("RTX-4090","2025-05-01","curated",1590,None,None,None),
     # ── GPU: RTX-4070-Super (launched Jan 2024 @ $599) ───────────────────────
     ("RTX-4070-Super","2024-01-01","curated",599,None,None,None),
     ("RTX-4070-Super","2024-02-01","curated",580,None,None,None),
@@ -465,6 +473,7 @@ CURATED_RETAIL_PRICES = [
     ("RTX-4070-Super","2025-02-01","curated",545,None,None,None),
     ("RTX-4070-Super","2025-03-01","curated",548,None,None,None),
     ("RTX-4070-Super","2025-04-01","curated",550,None,None,None),
+    ("RTX-4070-Super","2025-05-01","curated",548,None,None,None),
     # ── GPU: RTX-4060 (launched Jun 2023 @ $299) ─────────────────────────────
     ("RTX-4060","2023-06-01","curated",299,None,None,None),
     ("RTX-4060","2023-07-01","curated",295,None,None,None),
@@ -489,6 +498,7 @@ CURATED_RETAIL_PRICES = [
     ("RTX-4060","2025-02-01","curated",265,None,None,None),
     ("RTX-4060","2025-03-01","curated",265,None,None,None),
     ("RTX-4060","2025-04-01","curated",265,None,None,None),
+    ("RTX-4060","2025-05-01","curated",265,None,None,None),
     # ── GPU: RX-7900-XTX (launched Dec 2022 @ $999) ──────────────────────────
     ("RX-7900-XTX","2023-01-01","curated",900,None,None,None),
     ("RX-7900-XTX","2023-02-01","curated",870,None,None,None),
@@ -518,6 +528,7 @@ CURATED_RETAIL_PRICES = [
     ("RX-7900-XTX","2025-02-01","curated",750,None,None,None),
     ("RX-7900-XTX","2025-03-01","curated",740,None,None,None),
     ("RX-7900-XTX","2025-04-01","curated",730,None,None,None),
+    ("RX-7900-XTX","2025-05-01","curated",720,None,None,None),
     # ── GPU: RX-7600 (launched May 2023 @ $269) ──────────────────────────────
     ("RX-7600","2023-05-01","curated",269,None,None,None),
     ("RX-7600","2023-06-01","curated",260,None,None,None),
@@ -528,6 +539,7 @@ CURATED_RETAIL_PRICES = [
     ("RX-7600","2024-09-01","curated",230,None,None,None),
     ("RX-7600","2024-12-01","curated",228,None,None,None),
     ("RX-7600","2025-03-01","curated",225,None,None,None),
+    ("RX-7600","2025-05-01","curated",222,None,None,None),
     # ── CPU: R9-7950X (launched Sep 2022 @ $699) ─────────────────────────────
     ("R9-7950X","2023-01-01","curated",600,None,None,None),
     ("R9-7950X","2023-02-01","curated",580,None,None,None),
@@ -557,6 +569,7 @@ CURATED_RETAIL_PRICES = [
     ("R9-7950X","2025-02-01","curated",388,None,None,None),
     ("R9-7950X","2025-03-01","curated",385,None,None,None),
     ("R9-7950X","2025-04-01","curated",380,None,None,None),
+    ("R9-7950X","2025-05-01","curated",376,None,None,None),
     # ── CPU: R7-7800X3D (launched Feb 2023 @ $449) ───────────────────────────
     ("R7-7800X3D","2023-02-01","curated",449,None,None,None),
     ("R7-7800X3D","2023-03-01","curated",440,None,None,None),
@@ -585,6 +598,7 @@ CURATED_RETAIL_PRICES = [
     ("R7-7800X3D","2025-02-01","curated",332,None,None,None),
     ("R7-7800X3D","2025-03-01","curated",330,None,None,None),
     ("R7-7800X3D","2025-04-01","curated",328,None,None,None),
+    ("R7-7800X3D","2025-05-01","curated",325,None,None,None),
     # ── CPU: i9-14900K (launched Oct 2023 @ $589) ────────────────────────────
     ("i9-14900K","2023-10-01","curated",589,None,None,None),
     ("i9-14900K","2023-11-01","curated",572,None,None,None),
@@ -605,6 +619,7 @@ CURATED_RETAIL_PRICES = [
     ("i9-14900K","2025-02-01","curated",465,None,None,None),
     ("i9-14900K","2025-03-01","curated",460,None,None,None),
     ("i9-14900K","2025-04-01","curated",455,None,None,None),
+    ("i9-14900K","2025-05-01","curated",450,None,None,None),
     # ── CPU: R5-7600X (launched Sep 2022 @ $299) ─────────────────────────────
     ("R5-7600X","2023-01-01","curated",250,None,None,None),
     ("R5-7600X","2023-02-01","curated",240,None,None,None),
@@ -634,6 +649,7 @@ CURATED_RETAIL_PRICES = [
     ("R5-7600X","2025-02-01","curated",152,None,None,None),
     ("R5-7600X","2025-03-01","curated",150,None,None,None),
     ("R5-7600X","2025-04-01","curated",150,None,None,None),
+    ("R5-7600X","2025-05-01","curated",148,None,None,None),
     # ── RAM: DDR5-5600-32GB (retail kit, USD) ─────────────────────────────────
     ("DDR5-5600-32GB","2023-01-01","curated",200,None,None,None),
     ("DDR5-5600-32GB","2023-02-01","curated",195,None,None,None),
@@ -663,6 +679,7 @@ CURATED_RETAIL_PRICES = [
     ("DDR5-5600-32GB","2025-02-01","curated", 90,None,None,None),
     ("DDR5-5600-32GB","2025-03-01","curated", 92,None,None,None),
     ("DDR5-5600-32GB","2025-04-01","curated", 92,None,None,None),
+    ("DDR5-5600-32GB","2025-05-01","curated", 91,None,None,None),
     # ── RAM: DDR5-6000-32GB ───────────────────────────────────────────────────
     ("DDR5-6000-32GB","2023-01-01","curated",220,None,None,None),
     ("DDR5-6000-32GB","2023-02-01","curated",215,None,None,None),
@@ -692,6 +709,7 @@ CURATED_RETAIL_PRICES = [
     ("DDR5-6000-32GB","2025-02-01","curated",110,None,None,None),
     ("DDR5-6000-32GB","2025-03-01","curated",112,None,None,None),
     ("DDR5-6000-32GB","2025-04-01","curated",112,None,None,None),
+    ("DDR5-6000-32GB","2025-05-01","curated",111,None,None,None),
     # ── RAM: DDR4-3600-32GB ───────────────────────────────────────────────────
     ("DDR4-3600-32GB","2023-01-01","curated", 90,None,None,None),
     ("DDR4-3600-32GB","2023-02-01","curated", 85,None,None,None),
@@ -721,6 +739,7 @@ CURATED_RETAIL_PRICES = [
     ("DDR4-3600-32GB","2025-02-01","curated", 60,None,None,None),
     ("DDR4-3600-32GB","2025-03-01","curated", 60,None,None,None),
     ("DDR4-3600-32GB","2025-04-01","curated", 60,None,None,None),
+    ("DDR4-3600-32GB","2025-05-01","curated", 60,None,None,None),
     # ── RAM: DDR4-3200-16GB ───────────────────────────────────────────────────
     ("DDR4-3200-16GB","2023-01-01","curated", 50,None,None,None),
     ("DDR4-3200-16GB","2023-02-01","curated", 48,None,None,None),
@@ -750,6 +769,7 @@ CURATED_RETAIL_PRICES = [
     ("DDR4-3200-16GB","2025-02-01","curated", 32,None,None,None),
     ("DDR4-3200-16GB","2025-03-01","curated", 32,None,None,None),
     ("DDR4-3200-16GB","2025-04-01","curated", 32,None,None,None),
+    ("DDR4-3200-16GB","2025-05-01","curated", 32,None,None,None),
 ]
 
 # ── Convenience: all products merged ─────────────────────────────────────────
