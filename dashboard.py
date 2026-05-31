@@ -1959,7 +1959,7 @@ def _sc_vs_etf_panel():
     for _i, (lcat, lshort, _ldesc, ldate) in enumerate(ENTERPRISE_PRODUCT_LAUNCHES):
         _lcol = _LAUNCH_CAT_COLOR.get(lcat, SUBTEXT)
         fig.add_vline(
-            x=ldate,
+            x=datetime.strptime(ldate, "%Y-%m-%d"),
             line_width=1,
             line_dash="dot",
             line_color=_lcol,
