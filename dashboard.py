@@ -450,8 +450,6 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
     dcc.Interval(id="status-interval", interval=30_000, n_intervals=0),
     # Store for crawl-job state (polled by status-interval)
     dcc.Store(id="crawl-job-store", data={"running": False, "message": ""}),
-    # Store for Financials tab period selection (1 / 3 / 5 years); default = 3
-    dcc.Store(id="fin-period-store", data=3),
 ])
 
 
@@ -560,16 +558,6 @@ def trigger_crawl(_):
 _crawl_running: dict = {"active": False}
 
 
-@app.callback(
-    Output("fin-period-store", "data"),
-    Input("fin-period-radio",  "value"),
-    prevent_initial_call=True,
-)
-def update_fin_period(value):
-    """Persist Financials period-selector (1Y / 3Y / 5Y) to global store
-    so the selection survives tab switches."""
-    return int(value) if value else 3
-
 
 @app.callback(
     Output("ibkr-status-badge", "children"),
@@ -619,19 +607,17 @@ def update_ibkr_badge(_):
     Input("date-range",       "start_date"),
     Input("date-range",       "end_date"),
     Input("btn-refresh",      "n_clicks"),
-    Input("fin-period-store", "data"),
 )
-def render_tab(active_tab, tickers, start_date, end_date, _refresh, fin_period):
+def render_tab(active_tab, tickers, start_date, end_date, _refresh):
     if not tickers:
         return _card(html.P("Select at least one ticker from the sidebar.", style={"color": SUBTEXT}))
 
-    start      = start_date[:10] if start_date else "2023-01-01"
-    end        = end_date[:10]   if end_date   else _now_hkt().strftime("%Y-%m-%d")
-    fin_period = int(fin_period) if fin_period else 3
+    start = start_date[:10] if start_date else "2023-01-01"
+    end   = end_date[:10]   if end_date   else _now_hkt().strftime("%Y-%m-%d")
 
     _TAB_MAP = {
         "tab-overview":     lambda: tab_overview(tickers, start, end),
-        "tab-financials":   lambda: tab_financials(tickers, fin_period),
+        "tab-financials":   lambda: tab_financials(tickers),
         "tab-sentiment":    lambda: tab_sentiment(tickers),
         "tab-cycles":       lambda: tab_cycles(tickers),
         "tab-compare":      lambda: tab_compare(tickers),
@@ -806,13 +792,8 @@ def tab_overview(tickers, start, end):
 # TAB 2 — FINANCIALS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def tab_financials(tickers, period_years: int = 3):
-    """Render the Financials tab.
-
-    period_years — how many years of quarterly data to display (1, 3, or 5).
-    Controlled by the dcc.RadioItems at the top of this tab; persisted in
-    fin-period-store so the selection survives tab switches.
-    """
+def tab_financials(tickers):
+    """Render the Financials tab (all available data, up to 5 years)."""
     df = financials_data(tickers)
     if df.empty:
         return _card(html.P("No quarterly financial data. Run crawler.py — financials are only available for listed companies.", style={"color": SUBTEXT}))
@@ -820,39 +801,14 @@ def tab_financials(tickers, period_years: int = 3):
     df["period_end"] = pd.to_datetime(df["period_end"])
     df = df.sort_values("period_end")
 
-    # Always fetch up to 5 years so switching to 5Y works without a new DB query.
+    # Show up to 5 years of data.
     _cutoff_5y = pd.Timestamp(_now_hkt() - timedelta(days=365 * 5))
-    df = df[df["period_end"] >= _cutoff_5y]
-
-    # Apply the user-selected period window
-    _cutoff_sel = pd.Timestamp(_now_hkt() - timedelta(days=365 * period_years))
-    df_view = df[df["period_end"] >= _cutoff_sel]
+    df_view = df[df["period_end"] >= _cutoff_5y]
 
     # Quarterly label used as categorical x-axis — evenly-spaced bars regardless
     # of how many tickers are grouped.
     def _qlabel(ts) -> str:
         return f"{ts.year}-Q{ts.quarter}"
-
-    # ── Period selector widget ────────────────────────────────────────────────
-    period_selector = html.Div([
-        html.Span("Period: ", style={"color": SUBTEXT, "fontSize": "12px",
-                                     "marginRight": "8px", "fontWeight": "600"}),
-        dbc.RadioItems(
-            id="fin-period-radio",
-            options=[
-                {"label": "1 Year",  "value": 1},
-                {"label": "3 Years", "value": 3},
-                {"label": "5 Years", "value": 5},
-            ],
-            value=period_years,
-            inline=True,
-            inputStyle={"marginRight": "4px", "accentColor": ACCENT},
-            labelStyle={"marginRight": "16px", "fontSize": "13px", "color": TEXT,
-                        "cursor": "pointer"},
-        ),
-    ], style={"display": "flex", "alignItems": "center", "marginBottom": "12px",
-              "padding": "8px 12px", "background": BG3, "borderRadius": "6px",
-              "border": "1px solid #30363d"})
 
     def metric_chart(col: str, title: str, pct: bool = False):
         fig = go.Figure()
@@ -898,7 +854,7 @@ def tab_financials(tickers, period_years: int = 3):
     # Latest financials table
     latest_cols = ["ticker", "period_end", "revenue", "gross_margin",
                    "op_margin", "net_margin", "pe_ratio", "eps", "market_cap"]
-    latest = df.sort_values("period_end").groupby("ticker").last().reset_index()
+    latest = df_view.sort_values("period_end").groupby("ticker").last().reset_index()
     tbl_data = latest[[c for c in latest_cols if c in latest.columns]].copy()
     for col in ["revenue", "market_cap"]:
         if col in tbl_data:
@@ -926,10 +882,7 @@ def tab_financials(tickers, period_years: int = 3):
         page_size=20,
     )
 
-    period_label = {1: "1 Year", 3: "3 Years", 5: "5 Years"}.get(period_years, f"{period_years} Years")
     return html.Div([
-        # ── Period selector (1Y / 3Y / 5Y) ───────────────────────────────
-        period_selector,
         _card([_section_title("Latest Quarter Summary"), tbl]),
         dbc.Row([
             dbc.Col(_card(metric_chart("revenue",        "Revenue")),        width=6),
@@ -954,7 +907,7 @@ def tab_financials(tickers, period_years: int = 3):
         ]),
         _card(_source_footer("Yahoo Finance / yfinance",
                               f"Quarterly financials sourced from SEC EDGAR filings via yfinance. "
-                              f"Showing last {period_label} of data — switch with the 1Y / 3Y / 5Y selector above. "
+                              f"Showing up to 5 years of quarterly data. "
                               f"Revenue, profit, margins, R&D, AR and inventory turnover ratios.")),
     ])
 
