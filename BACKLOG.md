@@ -7,55 +7,23 @@
 > Convention: when you finish a backlog item, delete its row/section and (if it produced a
 > reusable lesson) add a row to `CLAUDE.md §9 Known Issues`.
 >
-> Last updated: 2026-05-31
+> Last updated: 2026-06-01
+
+## 🟠 Open — Enterprise GPU Price Data Requires Monthly Curated Updates
+
+The GPU (Enterprise) tab in Supply Chain now tracks A100/H100/H200/B200/MI300X contract prices.
+These are modeled estimates, not live scraped data (no Newegg/PassMark for enterprise GPUs).
+
+**Update monthly:** extend `CURATED_RETAIL_PRICES` enterprise rows in `products_config.py`
+using TrendForce enterprise GPU channel reports, cloud GPU spot pricing (CoreWeave/Lambda),
+and analyst research (Goldman/WF semiconductor team).
+
+Format: `("MODEL-ID","YYYY-MM-01","curated",price_usd,None,None,None)`.
+
+When a new flagship GPU ships (e.g. B300, MI400), add it to `GPU_ENTERPRISE_PRODUCTS` and
+add a corresponding entry to `FLAGSHIP_ERAS` and `GA_MARKERS` inside `_sc_enterprise_gpu_section()`.
 
 ---
-
-## 🟠 Open — Hardware Price Index Curated Data Lags ~12 Months
-
-**Status (verified 2026-05-31 against code):** Part 2 is DONE; Part 1 is barely started.
-- ✅ **Part 2 (code blend)** — `_sc_vs_etf_panel()` in `dashboard.py` (now ~line 1841) already
-  queries **all** sources (`curated + passmark + newegg`); the `AND source='curated'` filter
-  and the misleading "breaks normalisation" comment are gone. No code change needed.
-- 🟠 **Part 1 (curated data)** — `CURATED_RETAIL_PRICES`, `CURATED_DRAM_SPOT`, and
-  `CURATED_SEMI_BTB` now run to `2025-05` (advanced one month from `2025-04`). Today is
-  `2026-05`, so curated values are still ~12 months stale. The chart no longer flat-lines
-  *only if* live Newegg/PassMark crawl rows exist; if the live scrapers are returning empty
-  (DOM drift — see §10 maintenance), the index still effectively stops at 2025-05.
-
-### Part 1 (remaining) — Extend curated data in `products_config.py`
-
-Add monthly rows `2025-06` → `2026-05` for all 13 product IDs, format:
-```python
-("PRODUCT-ID", "YYYY-MM-01", "curated", price_usd, None, None, None),
-```
-
-Last-known (now 2025-05) prices and expected trend — extend forward from these:
-
-| product_id | 2025-04 | Trend driver → expected range |
-|---|---|---|
-| RTX-4090 | $1600 | RTX 5090 (Jan 2025) → ~$1350–1500 |
-| RTX-4070-Super | $550 | RTX 5070S (Jan 2025) → ~$450–530 |
-| RTX-4060 | $265 | RTX 5060 Ti (May 2025) → ~$199–250 |
-| RX-7900-XTX | $730 | RX 9070 XT (Mar 2025 @ $599) → ~$549–700 |
-| RX-7600 | $225 | RX 9060 XT pipeline → ~$185 |
-| R9-7950X | $380 | Zen 5 competition → ~$295–360 |
-| R7-7800X3D | $328 | R7 9800X3D (Nov 2024) → ~$249–315 |
-| i9-14900K | $455 | 2-gen-old → ~$349–440 |
-| R5-7600X | $150 | near floor → ~$125–148 |
-| DDR5-5600-32GB | $92 | DRAM oversupply → ~$72–88 |
-| DDR5-6000-32GB | $112 | → ~$88–108 |
-| DDR4-3600-32GB | $60 | mature/flat → ~$54–60 |
-| DDR4-3200-16GB | $32 | floor → ~$28–32 |
-
-Also extend `CURATED_DRAM_SPOT` and `CURATED_SEMI_BTB` through `2026-05`.
-
-> These are *modeled* curated values. Per `CLAUDE.md §8` (zero-hallucination), replace with
-> sourced figures (TrendForce / SEMI / retailer data) rather than shipping estimates. This is
-> the real blocker — sourcing, not the mechanical row-adding.
-
-**Done when:** curated series run to the current month locally, chart extends to ~2026-05,
-push + verify on Railway. Then remove this section and add a Known-Issues row.
 
 ---
 

@@ -31,12 +31,14 @@ from bs4 import BeautifulSoup
 from config import DB_PATH, REQUEST_DELAY_SECONDS, now_hkt as _now_hkt
 from products_config import (
     ALL_PRODUCTS,
+    CPU_ENTERPRISE_PRODUCTS,
     CPU_PRODUCTS,
     CURATED_CAPACITY,
     CURATED_DRAM_SPOT,
     CURATED_RETAIL_PRICES,
     CURATED_SEMI_BTB,
     CURATED_STEAM_SURVEY,
+    ENTERPRISE_PRODUCT_LAUNCHES,
     GPU_PRODUCTS,
     NEWEGG_PRODUCTS,
     RAM_PRODUCTS,
@@ -350,7 +352,9 @@ def crawl_passmark(conn: sqlite3.Connection) -> None:
 
     rows = []
     for model_id, prod in {**GPU_PRODUCTS, **CPU_PRODUCTS}.items():
-        kw      = prod.get("passmark_kw", prod["name"])
+        kw = prod.get("passmark_kw")
+        if kw is None:
+            continue   # archived/legacy product — skip live PassMark scraping
         pool    = gpu_entries if prod["category"] == "GPU" else cpu_entries
         match   = _match_passmark_entry(pool, kw)
         if not match:

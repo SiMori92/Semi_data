@@ -22,7 +22,12 @@ from plotly.subplots import make_subplots
 from scipy.signal import argrelextrema
 
 # Supply-chain product lists (for grouping in SC tab)
-from products_config import GPU_PRODUCTS, CPU_PRODUCTS, RAM_PRODUCTS
+from products_config import (
+    GPU_PRODUCTS, GPU_ENTERPRISE_PRODUCTS,
+    CPU_PRODUCTS, CPU_ENTERPRISE_PRODUCTS,
+    RAM_PRODUCTS,
+    ENTERPRISE_PRODUCT_LAUNCHES,
+)
 
 # IBKR integration (optional — graceful if not installed / not enabled)
 from ibkr_options_crawler import ibkr_is_enabled, init_ibkr_tables
@@ -1455,6 +1460,8 @@ def tab_cycles(tickers):
     tbl_df["category"]  = tbl_df["ticker"].map(_ticker_cat)
     tbl_df["_sort_key"] = tbl_df["ticker"].map(lambda t: _cat_rank.get(t, (99, 99)))
     tbl_df = tbl_df.sort_values("_sort_key").drop(columns=["_sort_key"])
+    tbl_df = tbl_df[["ticker", "category", "up_cycle_magnitude", "up_cycle_duration",
+                      "down_cycle_magnitude", "down_cycle_duration", "vol_diff_last_cycle"]]
 
     for col in ["up_cycle_magnitude", "down_cycle_magnitude"]:
         tbl_df[col] = tbl_df[col].map(lambda x: f"+{x:.1f}%" if pd.notna(x) and x >= 0
@@ -1744,10 +1751,11 @@ def run_comparison(_, a_start, a_end, b_start, b_end, tickers):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def sc_prices_query(category: str, source: str = None) -> pd.DataFrame:
-    """Return price history for all products in a category (GPU/CPU/RAM)."""
+    """Return price history for all products in a category (GPU/GPU-Enterprise/CPU/RAM)."""
     model_ids = list(
-        ({**GPU_PRODUCTS} if category == "GPU" else
-         {**CPU_PRODUCTS} if category == "CPU" else
+        ({**GPU_PRODUCTS}            if category == "GPU" else
+         {**GPU_ENTERPRISE_PRODUCTS} if category == "GPU-Enterprise" else
+         {**CPU_PRODUCTS}            if category == "CPU" else
          {**RAM_PRODUCTS}).keys()
     )
     if not model_ids:
@@ -1793,17 +1801,23 @@ def sc_steam_query() -> pd.DataFrame:
 
 def _sc_vs_etf_panel():
     """
-    Overlay the GPU / CPU / RAM retail price indices (monthly avg, normalised
-    to base=100) against SOXX (iShares Semiconductor ETF) historical price.
+    Overlay the enterprise GPU / CPU / RAM (HBM) price indices (monthly avg,
+    normalised to base=100) against SOXX (iShares Semiconductor ETF).
     Falls back to SMH if SOXX has not been crawled yet.
-    Shows both a normalised comparison chart and a rolling correlation panel.
+    GPU = NVIDIA/AMD AI accelerators (A100 → H100 → H200 → B200 + MI300X).
+    CPU = Intel Xeon Platinum + AMD EPYC server-class CPUs.
+    RAM = HBM3 / HBM3E per-stack contract price (the AI memory benchmark).
+    Vertical markers indicate when each new generation reached GA.
     """
 
     # ── 1. Build monthly price indices for each category ─────────────────────
+    # RAM: restrict to HBM-class enterprise memory only (HBM3 + HBM3E stacks)
+    _HBM_PRODUCTS = {k: v for k, v in RAM_PRODUCTS.items()
+                     if v.get("type") in ("HBM3", "HBM3E")}
     CATEGORIES = [
-        ("GPU", GPU_PRODUCTS, "#76b900"),
-        ("CPU", CPU_PRODUCTS, "#0071C5"),
-        ("RAM", RAM_PRODUCTS, "#ED1C24"),
+        ("GPU", GPU_ENTERPRISE_PRODUCTS, "#76b900"),
+        ("CPU", CPU_ENTERPRISE_PRODUCTS, "#0071C5"),
+        ("RAM", _HBM_PRODUCTS,           "#ED1C24"),
     ]
 
     price_series: dict[str, pd.Series] = {}
@@ -1935,13 +1949,33 @@ def _sc_vs_etf_panel():
                   annotation_text="Base = 100", annotation_position="right",
                   annotation_font_color=SUBTEXT, annotation_font_size=10)
 
+    # ── Product-generation launch markers ─────────────────────────────────────
+    # Alternate annotation positions so labels don't overlap when launches
+    # cluster (e.g. Nov 2022 has both H100 GA and Genoa GA).
+    _LAUNCH_CAT_COLOR = {"GPU": "#76b900", "CPU": "#0071C5", "RAM": "#ED1C24"}
+    _launch_positions = ["top left", "top right", "top left", "top right",
+                         "top left", "top right", "top left", "top right",
+                         "top left"]
+    for _i, (lcat, lshort, _ldesc, ldate) in enumerate(ENTERPRISE_PRODUCT_LAUNCHES):
+        _lcol = _LAUNCH_CAT_COLOR.get(lcat, SUBTEXT)
+        fig.add_vline(
+            x=ldate,
+            line_width=1,
+            line_dash="dot",
+            line_color=_lcol,
+            annotation_text=f"▲ {lshort}",
+            annotation_position=_launch_positions[_i % len(_launch_positions)],
+            annotation_font_color=_lcol,
+            annotation_font_size=9,
+        )
+
     fig.update_layout(
         **PLOTLY_TEMPLATE["layout"],
         title=(
-            f"Hardware Price Index vs {etf_ticker} ETF — Normalised to 100"
-            if etf_ticker else "Hardware Price Index — Normalised to 100"
+            f"Enterprise AI Hardware Price Index vs {etf_ticker} ETF — Normalised to 100"
+            if etf_ticker else "Enterprise AI Hardware Price Index — Normalised to 100"
         ),
-        height=440,
+        height=480,
         xaxis_title="Month",
         yaxis_title="Index (Base = 100 at common start)",
         hovermode="x unified",
@@ -2119,15 +2153,18 @@ def _sc_vs_etf_panel():
 
     # ── 8. Assemble panel ────────────────────────────────────────────────────
     note_etf = (
-        f"Comparing hardware retail price trends (PassMark / Newegg) against "
+        f"Comparing enterprise AI hardware price trends against "
         f"{etf_ticker} (iShares Semiconductor ETF) as a proxy for semiconductor "
-        f"industry equity performance. A rising price index alongside a rising ETF "
-        f"may indicate demand-driven pricing power; divergence may signal inventory "
-        f"correction or supply-side oversupply."
+        f"industry equity performance. "
+        f"GPU = NVIDIA/AMD AI accelerators (A100 → H100 → H200 → B200, MI300X); "
+        f"CPU = Intel Xeon Platinum + AMD EPYC server flagship SKUs; "
+        f"RAM = HBM3/HBM3E per-stack contract ASP (the AI memory price benchmark). "
+        f"▲ markers indicate when each new product generation reached GA — "
+        f"the index tracks the full portfolio across generations."
     )
 
     children = [
-        _section_title(f"Hardware Price Index vs {etf_ticker} ETF — Industry Correlation"),
+        _section_title(f"Enterprise AI Hardware Price Index vs {etf_ticker} ETF — Industry Correlation"),
         html.P(note_etf, style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "12px"}),
         dcc.Graph(figure=fig, config={"displayModeBar": True}),
     ]
@@ -2147,11 +2184,11 @@ def _sc_vs_etf_panel():
             html.Div(style={"marginTop": "8px"}),
             _section_title("Category-Level Monthly Avg Price & ETF Snapshot"),
             html.P(
-                "This table shows the category-level average retail price (GPU, CPU, RAM) "
-                "and ETF close for the most recent month — each row is the mean across "
-                "all tracked models in that category. "
-                "This is distinct from the 'Product Category — Price Index & Availability' "
-                "panel above, which shows individual model-level prices and stock status.",
+                "Category-level average enterprise ASP for the most recent month — "
+                "mean across all tracked models per category: "
+                "GPU = AI accelerators (A100/H100/H200/B200 + MI300X); "
+                "CPU = Intel Xeon Platinum + AMD EPYC server SKUs; "
+                "RAM = HBM3/HBM3E per-stack contract price.",
                 style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "8px"},
             ),
             snapshot_tbl,
@@ -2160,10 +2197,14 @@ def _sc_vs_etf_panel():
     etf_note = (f"SOXX (iShares Semiconductor ETF)" if etf_ticker == "SOXX"
                 else f"{etf_ticker} (VanEck Semiconductor ETF — SOXX proxy until SOXX is crawled)")
     children.append(_source_footer(
-        f"PassMark / Newegg (price index)  ·  Yahoo Finance / yfinance ({etf_note})",
-        "Price index = monthly average retail price across all tracked models per category. "
-        f"ETF series = month-end close. Common base date: "
-        f"{common_start.strftime('%Y-%m') if common_start else 'N/A'}.",
+        f"NVIDIA/AMD/Intel enterprise ODP + TrendForce contract-price estimates (GPU/CPU/HBM)  ·  "
+        f"Yahoo Finance / yfinance ({etf_note})",
+        "GPU index = avg contract ASP across A100/H100/H200/B200/MI300X per month.  "
+        "CPU index = avg ODP-derived ASP across Xeon Platinum + EPYC server SKUs.  "
+        "RAM index = HBM3 (48 GB stack) / HBM3E (96 GB stack) per-stack contract price.  "
+        f"All series normalised to 100 at common start: "
+        f"{common_start.strftime('%Y-%m') if common_start else 'N/A'}.  "
+        "▲ markers = product generation GA dates.",
     ))
 
     return _card(children)
@@ -2192,17 +2233,37 @@ def tab_supply_chain():
                 style={"color": RED, "fontSize": "13px"},
             ))
 
+    def _safe_enterprise_gpu():
+        try:
+            return _sc_enterprise_gpu_section()
+        except Exception as exc:
+            return _card(html.P(
+                f"Error loading Enterprise GPU data: {exc}",
+                style={"color": RED, "fontSize": "13px"},
+            ))
+
+    def _safe_enterprise_ram():
+        try:
+            return _sc_enterprise_ram_section()
+        except Exception as exc:
+            return _card(html.P(
+                f"Error loading Enterprise RAM data: {exc}",
+                style={"color": RED, "fontSize": "13px"},
+            ))
+
     # dbc.Tabs renders tab content directly — no server round-trip required.
     # All three sections are built once when the Supply Chain tab is opened.
+    # GPU tab: enterprise data-center GPUs (A100/H100/H200/B200/MI300X).
+    # RAM tab: enterprise HBM (HBM3/HBM3E) with consumer DRAM section below.
     price_tabs = dbc.Tabs(
         [
-            dbc.Tab(_safe_price_section("GPU"), label="🖥️  GPU", tab_id="sc-tab-gpu",
+            dbc.Tab(_safe_enterprise_gpu(), label="🖥️  GPU (Enterprise)", tab_id="sc-tab-gpu",
                     label_style={"fontSize": "13px", "color": TEXT},
                     active_label_style={"color": ACCENT, "fontWeight": "600"}),
             dbc.Tab(_safe_price_section("CPU"), label="⚙️  CPU", tab_id="sc-tab-cpu",
                     label_style={"fontSize": "13px", "color": TEXT},
                     active_label_style={"color": ACCENT, "fontWeight": "600"}),
-            dbc.Tab(_safe_price_section("RAM"), label="💾  RAM", tab_id="sc-tab-ram",
+            dbc.Tab(_safe_enterprise_ram(), label="💾  RAM (Enterprise)", tab_id="sc-tab-ram",
                     label_style={"fontSize": "13px", "color": TEXT},
                     active_label_style={"color": ACCENT, "fontWeight": "600"}),
         ],
@@ -2244,7 +2305,7 @@ def tab_supply_chain():
     ])
 
 
-def _sc_dram_inline() -> html.Div:
+def _sc_dram_inline(height: int = 360) -> html.Div:
     """DRAM & HBM spot price chart + YoY table — embedded inside the RAM tab."""
     df = sc_dram_query()
     if df.empty:
@@ -2287,7 +2348,7 @@ def _sc_dram_inline() -> html.Div:
     fig.update_layout(
         **PLOTLY_TEMPLATE["layout"],
         title="DRAM & HBM Spot / Contract Prices — DDR4/DDR5 (USD/die) · HBM3E (USD/GB)",
-        height=360, xaxis_title="Month", yaxis_title="Price (USD)",
+        height=height, xaxis_title="Month", yaxis_title="Price (USD)",
     )
     # Anchor x-range to actual data end so initial 1Y view is not empty when
     # curated data lags today.  stepmode="backward" buttons stay relative to
@@ -2367,13 +2428,442 @@ def _sc_dram_inline() -> html.Div:
     ])
 
 
+def _sc_enterprise_gpu_section():
+    """
+    Enterprise / Data-Center GPU price index with:
+    - Per-card contract price history for A100, H100, H200, B200, MI300X
+    - Flagship-era shaded bands (Ampere → Hopper → Hopper+ → Blackwell)
+    - Product launch / GA vertical annotations
+    - FP16 TFLOPS vs latest price scatter (instead of consumer PassMark)
+    - YoY price change table
+    """
+    df_curated = sc_prices_query("GPU-Enterprise", source="curated")
+
+    # ── Generation milestone definitions ─────────────────────────────────────
+    # (era_label, x0, x1, fill_rgba, text_color, text)
+    FLAGSHIP_ERAS = [
+        ("Ampere Era (A100)",  "2020-11-01", "2022-10-31", "rgba(139,92,246,0.07)",  "#9d7dea", "Ampere"),
+        ("Hopper Era (H100)",  "2022-11-01", "2024-05-31", "rgba(0,163,224,0.07)",   "#0071C5", "Hopper"),
+        ("Hopper+ (H200)",     "2024-06-01", "2024-11-30", "rgba(0,200,180,0.07)",   "#00C8B4", "H200"),
+        ("Blackwell (B200)",   "2024-12-01", "2026-07-31", "rgba(118,185,0,0.07)",   "#76b900", "Blackwell"),
+    ]
+    # (model_id, ga_date, label, color)
+    GA_MARKERS = [
+        ("A100-SXM4-80GB",  "2020-11-01", "A100 Launch",    "#9d7dea"),
+        ("H100-SXM5-80GB",  "2022-11-01", "H100 GA",        "#0071C5"),
+        ("MI300X-192GB",    "2024-01-01", "MI300X GA",      "#ED1C24"),
+        ("H200-SXM-141GB",  "2024-06-01", "H200 GA",        "#00C8B4"),
+        ("B200-SXM-192GB",  "2024-12-01", "B200 GA",        "#76b900"),
+    ]
+    COLOR_BY_MODEL = {
+        "A100-SXM4-80GB":  "#9d7dea",
+        "H100-SXM5-80GB":  "#0071C5",
+        "H200-SXM-141GB":  "#00C8B4",
+        "B200-SXM-192GB":  "#76b900",
+        "MI300X-192GB":    "#ED1C24",
+    }
+
+    # ── Price history line chart ───────────────────────────────────────────────
+    fig_price = go.Figure()
+
+    if not df_curated.empty:
+        for mid, grp in df_curated.groupby("model_id"):
+            grp = grp.sort_values("date")
+            prod_name = grp["name"].iloc[0] if "name" in grp.columns else mid
+            col = COLOR_BY_MODEL.get(mid, CHART_COLORS[0])
+            fig_price.add_trace(go.Scatter(
+                x=grp["date"], y=grp["price_usd"],
+                name=prod_name, mode="lines+markers",
+                line=dict(width=2.5, color=col),
+                marker=dict(size=4),
+                hovertemplate=(
+                    f"<b>{prod_name}</b><br>%{{x|%b %Y}}<br>"
+                    f"Price: $%{{y:,.0f}}<extra></extra>"
+                ),
+            ))
+
+    fig_price.update_layout(
+        **PLOTLY_TEMPLATE["layout"],
+        title="Enterprise GPU — Estimated Contract/Spot Price (USD/card)",
+        height=400, xaxis_title="", yaxis_title="Price (USD / card)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+
+    # Flagship-era shaded backgrounds
+    for (era_label, x0, x1, fill, tc, short) in FLAGSHIP_ERAS:
+        fig_price.add_vrect(
+            x0=x0, x1=x1, fillcolor=fill, line_width=0,
+            annotation_text=short, annotation_position="top left",
+            annotation=dict(font_size=10, font_color=tc, yshift=-14),
+        )
+
+    # Product GA vertical dashed lines
+    for (mid, ga_date, label, col) in GA_MARKERS:
+        fig_price.add_vline(
+            x=ga_date, line_dash="dot", line_color=col, line_width=1.5,
+            annotation_text=f"◆ {label}",
+            annotation_position="top right",
+            annotation=dict(font_size=9, font_color=col, textangle=-90, yshift=-10),
+        )
+
+    # Anchor x-axis to data
+    if not df_curated.empty:
+        _pr_end_dt = pd.to_datetime(df_curated["date"].max())
+        _pr_rend   = (_pr_end_dt + pd.DateOffset(months=2)).strftime("%Y-%m-%d")
+        _pr_rstart = (_pr_end_dt - pd.DateOffset(years=1)).strftime("%Y-%m-%d")
+    else:
+        _pr_rend   = _now_hkt().strftime("%Y-%m-%d")
+        _pr_rstart = _range_start(1)
+    fig_price.update_xaxes(
+        type="date",
+        rangeselector=_time_rangeselector(active_index=1),   # 3Y default
+        range=[_pr_rstart, _pr_rend],
+        rangeslider=dict(visible=False),
+    )
+
+    # ── FP16 TFLOPS vs Latest Price scatter ──────────────────────────────────
+    # Use specs from GPU_ENTERPRISE_PRODUCTS.tflops_fp16_dense
+    fig_perf = go.Figure()
+    if not df_curated.empty:
+        latest_price = (
+            df_curated.sort_values("date")
+            .groupby("model_id")[["price_usd", "name"]]
+            .last()
+            .reset_index()
+        )
+        for _, row in latest_price.iterrows():
+            mid   = row["model_id"]
+            prod  = GPU_ENTERPRISE_PRODUCTS.get(mid, {})
+            tflops = prod.get("tflops_fp16_dense")
+            if tflops is None or pd.isna(row["price_usd"]):
+                continue
+            col       = COLOR_BY_MODEL.get(mid, CHART_COLORS[0])
+            prod_name = row["name"] if pd.notna(row.get("name", None)) else mid
+            fig_perf.add_trace(go.Scatter(
+                x=[row["price_usd"]], y=[tflops],
+                mode="markers+text",
+                name=prod_name,
+                text=[prod_name],
+                textposition="top center",
+                textfont=dict(size=9),
+                marker=dict(size=14, color=col, line=dict(width=1, color="#30363d")),
+                hovertemplate=(
+                    f"<b>{prod_name}</b><br>Latest price: $%{{x:,.0f}}<br>"
+                    f"FP16 Dense: {tflops} TFLOPS<extra></extra>"
+                ),
+            ))
+    fig_perf.update_layout(
+        **PLOTLY_TEMPLATE["layout"],
+        title="Enterprise GPU — FP16 Dense TFLOPS vs Latest Price",
+        height=360, xaxis_title="Latest Contract Price (USD/card)",
+        yaxis_title="FP16 Dense TFLOPS", showlegend=False,
+    )
+
+    # ── YoY price change table ─────────────────────────────────────────────────
+    yoy_section = html.Span()
+    if not df_curated.empty:
+        latest_snap = (
+            df_curated.sort_values("date")
+            .groupby("model_id")
+            .last()
+            .reset_index()[["model_id", "date", "price_usd"]]
+        )
+        _cutoff_1y = (pd.Timestamp(_now_hkt()) - pd.DateOffset(months=12)).strftime("%Y-%m-%d")
+        hist_1y = (
+            df_curated[df_curated["date"] <= _cutoff_1y]
+            .sort_values("date")
+            .groupby("model_id")["price_usd"]
+            .last()
+            .rename("price_1y_ago")
+        )
+        yoy_df = (
+            latest_snap
+            .merge(df_curated[["model_id", "name"]].drop_duplicates("model_id"),
+                   on="model_id", how="left")
+            .merge(hist_1y, on="model_id", how="left")
+        )
+        yoy_df["YoY Δ"] = yoy_df.apply(
+            lambda r: f"{(r['price_usd'] / r['price_1y_ago'] - 1) * 100:+.1f}%"
+                      if pd.notna(r["price_1y_ago"]) and r["price_1y_ago"] > 0 else "—",
+            axis=1,
+        )
+        yoy_df["Generation"] = yoy_df["model_id"].map({
+            "A100-SXM4-80GB": "Ampere",
+            "H100-SXM5-80GB": "Hopper",
+            "H200-SXM-141GB": "Hopper+",
+            "B200-SXM-192GB": "Blackwell",
+            "MI300X-192GB":   "CDNA3 (AMD)",
+        }).fillna("—")
+        yoy_df["FP16 TFLOPS"] = yoy_df["model_id"].map(
+            {mid: str(p.get("tflops_fp16_dense", "—"))
+             for mid, p in GPU_ENTERPRISE_PRODUCTS.items()}
+        ).fillna("—")
+        yoy_df = yoy_df.rename(columns={
+            "name": "Product", "date": "As of",
+            "price_usd": "Latest Price (USD)", "price_1y_ago": "Price 1Y Ago (USD)",
+        })
+        yoy_df["Latest Price (USD)"] = yoy_df["Latest Price (USD)"].map(
+            lambda x: f"${x:,.0f}" if pd.notna(x) else "—")
+        yoy_df["Price 1Y Ago (USD)"] = yoy_df["Price 1Y Ago (USD)"].map(
+            lambda x: f"${x:,.0f}" if pd.notna(x) else "—")
+        yoy_df = yoy_df[[
+            "Product", "Generation", "FP16 TFLOPS",
+            "Latest Price (USD)", "Price 1Y Ago (USD)", "YoY Δ",
+        ]]
+        yoy_tbl = dash_table.DataTable(
+            data=yoy_df.to_dict("records"),
+            columns=[{"name": c, "id": c} for c in yoy_df.columns],
+            sort_action="native",
+            style_table={"overflowX": "auto"},
+            style_cell={"backgroundColor": BG3, "color": TEXT,
+                        "border": "1px solid #30363d",
+                        "fontSize": "13px", "padding": "6px 10px"},
+            style_header={"backgroundColor": BG2, "color": ACCENT,
+                          "fontWeight": "600", "border": "1px solid #30363d"},
+            style_data_conditional=[
+                {"if": {"row_index": "odd"}, "backgroundColor": BG2},
+                {"if": {"filter_query": '{YoY Δ} contains "+"', "column_id": "YoY Δ"},
+                 "color": GREEN, "fontWeight": "600"},
+                {"if": {"filter_query": '{YoY Δ} contains "-"', "column_id": "YoY Δ"},
+                 "color": RED, "fontWeight": "600"},
+            ],
+        )
+        yoy_section = _card([
+            _section_title("Enterprise GPU — Latest Prices & Year-on-Year Change"),
+            yoy_tbl,
+        ])
+
+    return html.Div([
+        dbc.Row([
+            dbc.Col(_card(dcc.Graph(figure=fig_price, config={"displayModeBar": True})), width=7),
+            dbc.Col(_card(dcc.Graph(figure=fig_perf,  config={"displayModeBar": True})), width=5),
+        ]),
+        yoy_section,
+        _card(_source_footer(
+            "NVIDIA / AMD Official Specs · TrendForce Enterprise GPU Channel Estimates · "
+            "Goldman Sachs / Wells Fargo Semiconductor Research · Public Cloud GPU Spot Pricing",
+            "Prices are estimated per-card contract/spot prices (USD). "
+            "Not retail — enterprise GPUs are sold via OEM/cloud channels. "
+            "FP16 Dense TFLOPS from official datasheets (no sparsity multiplier). "
+            "Flagship eras: Ampere (A100) → Hopper (H100) → Hopper+ (H200) → Blackwell (B200). "
+            "Update GPU_ENTERPRISE_PRODUCTS in products_config.py monthly.",
+        )),
+    ])
+
+
+def _sc_enterprise_ram_section():
+    """
+    Enterprise / AI-accelerator HBM price index with:
+    - HBM3 and HBM3E contract price history (USD/GB) with generation era shading
+    - Key generation GA vertical annotations
+    - Memory bandwidth (GB/s per stack) vs latest spot price scatter
+    - YoY price change table
+    - Consumer DRAM inline section below for context
+    """
+    df_all = sc_dram_query()
+    df_hbm = df_all[df_all["product_type"].isin(["HBM3", "HBM3E"])].copy()
+
+    # ── Generation era definitions ────────────────────────────────────────────
+    HBM_ERAS = [
+        ("HBM3 Era",  "2022-06-01", "2023-12-31", "rgba(0,113,197,0.07)",  "#0071C5", "HBM3"),
+        ("HBM3E Era", "2024-01-01", "2026-07-31", "rgba(118,185,0,0.07)",  "#76b900", "HBM3E"),
+    ]
+    HBM_MARKERS = [
+        ("2022-06-01", "HBM3 GA (SK Hynix)",    "#0071C5"),
+        ("2024-01-01", "HBM3E GA (H100/MI300X)", "#76b900"),
+    ]
+    HBM_COLORS = {
+        "HBM3":  "#0071C5",
+        "HBM3E": "#76b900",
+    }
+    # Per-stack bandwidth: speed_mhz × 1024-bit interface / 8 / 1000 (→ GB/s)
+    HBM_SPECS = {
+        "HBM3":  {"bandwidth_gbs": 819,  "capacity_gb": 48, "config": "8-Hi"},
+        "HBM3E": {"bandwidth_gbs": 1177, "capacity_gb": 96, "config": "12-Hi"},
+    }
+
+    # ── Price history line chart ──────────────────────────────────────────────
+    fig_price = go.Figure()
+    if not df_hbm.empty:
+        df_hbm["period_dt"] = pd.to_datetime(df_hbm["period"] + "-01")
+        for ptype, grp in df_hbm.groupby("product_type"):
+            grp = grp.sort_values("period_dt")
+            col = HBM_COLORS.get(ptype, CHART_COLORS[0])
+            fig_price.add_trace(go.Scatter(
+                x=grp["period_dt"], y=grp["price_usd"],
+                name=ptype,
+                mode="lines+markers",
+                line=dict(width=2.5, color=col),
+                marker=dict(size=5),
+                hovertemplate=(
+                    f"<b>{ptype}</b><br>%{{x|%b %Y}}<br>"
+                    f"$%{{y:.2f}}/GB<extra></extra>"
+                ),
+            ))
+
+    fig_price.update_layout(
+        **PLOTLY_TEMPLATE["layout"],
+        title="Enterprise RAM (HBM) — Estimated Contract Price (USD/GB)",
+        height=400, xaxis_title="", yaxis_title="Contract Price (USD / GB)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+
+    for (era_label, x0, x1, fill, tc, short) in HBM_ERAS:
+        fig_price.add_vrect(
+            x0=x0, x1=x1, fillcolor=fill, line_width=0,
+            annotation_text=short, annotation_position="top left",
+            annotation=dict(font_size=10, font_color=tc, yshift=-14),
+        )
+    for (ga_date, label, col) in HBM_MARKERS:
+        fig_price.add_vline(
+            x=ga_date, line_dash="dot", line_color=col, line_width=1.5,
+            annotation_text=f"◆ {label}",
+            annotation_position="top right",
+            annotation=dict(font_size=9, font_color=col, textangle=-90, yshift=-10),
+        )
+
+    # Anchor to data end; default 3Y view (covers HBM3 → HBM3E transition)
+    if not df_hbm.empty:
+        _end_dt  = pd.to_datetime(df_hbm["period"].max() + "-01")
+        _rend    = (_end_dt + pd.DateOffset(months=2)).strftime("%Y-%m-%d")
+        _rstart  = (_end_dt - pd.DateOffset(years=1)).strftime("%Y-%m-%d")
+    else:
+        _rend   = _now_hkt().strftime("%Y-%m-%d")
+        _rstart = _range_start(1)
+    fig_price.update_xaxes(
+        type="date",
+        rangeselector=_time_rangeselector(active_index=1),   # 3Y default
+        range=[_rstart, _rend],
+        rangeslider=dict(visible=False),
+    )
+
+    # ── Bandwidth vs Latest Spot Price scatter ────────────────────────────────
+    fig_perf = go.Figure()
+    if not df_hbm.empty:
+        latest_hbm = (df_hbm.sort_values("period")
+                      .groupby("product_type")[["price_usd"]]
+                      .last()
+                      .reset_index())
+        for _, row in latest_hbm.iterrows():
+            ptype = row["product_type"]
+            specs = HBM_SPECS.get(ptype)
+            if specs is None or pd.isna(row["price_usd"]):
+                continue
+            col = HBM_COLORS.get(ptype, CHART_COLORS[0])
+            bw  = specs["bandwidth_gbs"]
+            cap = specs["capacity_gb"]
+            cfg = specs["config"]
+            fig_perf.add_trace(go.Scatter(
+                x=[row["price_usd"]], y=[bw],
+                mode="markers+text",
+                name=ptype,
+                text=[ptype],
+                textposition="top center",
+                textfont=dict(size=10),
+                marker=dict(size=16, color=col, line=dict(width=1, color="#30363d")),
+                hovertemplate=(
+                    f"<b>{ptype} ({cfg})</b><br>Spot: $%{{x:.2f}}/GB<br>"
+                    f"Bandwidth: {bw} GB/s per stack<br>"
+                    f"Capacity: {cap} GB per stack<extra></extra>"
+                ),
+            ))
+    fig_perf.update_layout(
+        **PLOTLY_TEMPLATE["layout"],
+        title="HBM — Memory Bandwidth vs Spot Price",
+        height=360,
+        xaxis_title="Latest Contract Price (USD / GB)",
+        yaxis_title="Memory Bandwidth (GB/s per stack)",
+        showlegend=False,
+    )
+
+    # ── YoY price change table ────────────────────────────────────────────────
+    yoy_section = html.Span()
+    if not df_hbm.empty:
+        latest_snap = (df_hbm.sort_values("period")
+                       .groupby("product_type")
+                       .last()
+                       .reset_index()[["product_type", "period", "price_usd", "source"]])
+        _cutoff_1y = (pd.Timestamp(_now_hkt()) - pd.DateOffset(months=12)).strftime("%Y-%m")
+        prior_1y = (df_hbm[df_hbm["period"] <= _cutoff_1y]
+                    .sort_values("period")
+                    .groupby("product_type")["price_usd"]
+                    .last()
+                    .rename("price_1y_ago"))
+        yoy_df = latest_snap.merge(prior_1y, on="product_type", how="left")
+        yoy_df["YoY Δ"] = yoy_df.apply(
+            lambda r: f"{(r['price_usd'] / r['price_1y_ago'] - 1) * 100:+.1f}%"
+                      if pd.notna(r.get("price_1y_ago")) and r["price_1y_ago"] > 0 else "—",
+            axis=1,
+        )
+        yoy_df["Bandwidth (GB/s)"] = yoy_df["product_type"].map(
+            {k: str(v["bandwidth_gbs"]) for k, v in HBM_SPECS.items()}
+        ).fillna("—")
+        yoy_df["Capacity (GB)"] = yoy_df["product_type"].map(
+            {k: str(v["capacity_gb"]) for k, v in HBM_SPECS.items()}
+        ).fillna("—")
+        yoy_df = yoy_df.rename(columns={
+            "product_type": "Generation", "period": "As of",
+            "price_usd": "Spot Price (USD/GB)", "price_1y_ago": "Price 1Y Ago (USD/GB)",
+        })
+        yoy_df["Spot Price (USD/GB)"]     = yoy_df["Spot Price (USD/GB)"].map(
+            lambda x: f"${x:.2f}" if pd.notna(x) else "—")
+        yoy_df["Price 1Y Ago (USD/GB)"]   = yoy_df["Price 1Y Ago (USD/GB)"].map(
+            lambda x: f"${x:.2f}" if pd.notna(x) else "—")
+        yoy_df = yoy_df[[
+            "Generation", "Bandwidth (GB/s)", "Capacity (GB)",
+            "Spot Price (USD/GB)", "Price 1Y Ago (USD/GB)", "YoY Δ", "source",
+        ]]
+        yoy_tbl = dash_table.DataTable(
+            data=yoy_df.to_dict("records"),
+            columns=[{"name": c, "id": c} for c in yoy_df.columns],
+            sort_action="native",
+            style_table={"overflowX": "auto"},
+            style_cell={"backgroundColor": BG3, "color": TEXT,
+                        "border": "1px solid #30363d",
+                        "fontSize": "13px", "padding": "6px 10px"},
+            style_header={"backgroundColor": BG2, "color": ACCENT,
+                          "fontWeight": "600", "border": "1px solid #30363d"},
+            style_data_conditional=[
+                {"if": {"row_index": "odd"}, "backgroundColor": BG2},
+                {"if": {"filter_query": '{YoY Δ} contains "+"', "column_id": "YoY Δ"},
+                 "color": GREEN, "fontWeight": "600"},
+                {"if": {"filter_query": '{YoY Δ} contains "-"', "column_id": "YoY Δ"},
+                 "color": RED, "fontWeight": "600"},
+            ],
+        )
+        yoy_section = _card([
+            _section_title("HBM — Latest Contract Prices & Year-on-Year Change"),
+            yoy_tbl,
+        ])
+
+    return html.Div([
+        dbc.Row([
+            dbc.Col(_card(dcc.Graph(figure=fig_price, config={"displayModeBar": True})), width=7),
+            dbc.Col(_card(dcc.Graph(figure=fig_perf,  config={"displayModeBar": True})), width=5),
+        ]),
+        yoy_section,
+        _card(_source_footer(
+            "TrendForce / DRAMeXchange · SK Hynix / Samsung / Micron Earnings Transcripts",
+            "HBM3 8-Hi and HBM3E 12-Hi: estimated contract prices per GB of stack capacity (USD/GB). "
+            "Sold exclusively to hyperscalers and AI chip OEMs (NVIDIA, AMD, Google, Microsoft). "
+            "Bandwidth calculated from JEDEC spec: speed_MT/s × 1024-bit interface / 8. "
+            "HBM3 era: Jun 2022 – Dec 2023 (SK Hynix primary, Samsung qualified Q4 2022). "
+            "HBM3E era: Jan 2024 onward (12-Hi stack, 96 GB, first shipped in H200/MI300X). "
+            "Update CURATED_DRAM_SPOT in products_config.py monthly.",
+        )),
+        html.Div(style={"marginTop": "8px"}),
+        _sc_dram_inline(),   # consumer DDR4/DDR5 spot prices for context
+    ])
+
+
 def _sc_price_section(category: str):
     """Price Index + Estimated Delivery (in-stock) for one category."""
     df_pass    = sc_prices_query(category, source="passmark")
     df_new     = sc_prices_query(category, source="newegg")
     df_curated = sc_prices_query(category, source="curated")
 
-    cat_label = {"GPU": "GPU", "CPU": "CPU", "RAM": "RAM Memory"}[category]
+    cat_label = {"GPU": "GPU", "GPU-Enterprise": "Enterprise GPU",
+                 "CPU": "CPU", "RAM": "RAM Memory"}[category]
     COLOR_MAP = {
         "NVIDIA": "#76b900", "AMD": "#ED1C24", "Intel": "#0071C5",
         "Samsung": "#1428A0", "SK Hynix": "#F15A24", "Micron": "#E31837",
@@ -2424,36 +2914,84 @@ def _sc_price_section(category: str):
 
     # ── Performance / Price scatter ───────────────────────────────────────
     fig_pp = go.Figure()
-    if not df_pass.empty:
-        latest_pass = df_pass.dropna(subset=["passmark_score", "price_usd"])
-        latest_pass = latest_pass.sort_values("date").groupby("model_id").last().reset_index()
-        if not latest_pass.empty:
-            for i, row in latest_pass.iterrows():
-                brand = row.get("brand", "")
-                col   = COLOR_MAP.get(brand, CHART_COLORS[i % len(CHART_COLORS)])
-                fig_pp.add_trace(go.Scatter(
-                    x=[row["price_usd"]], y=[row["passmark_score"]],
-                    mode="markers+text",
-                    name=row.get("name", row["model_id"]),
-                    text=[row.get("name", row["model_id"])],
-                    textposition="top center",
-                    textfont=dict(size=9),
-                    marker=dict(size=12, color=col, line=dict(width=1, color="#30363d")),
-                    hovertemplate=(
-                        f"<b>%{{text}}</b><br>Price: $%{{x:.0f}}"
-                        f"<br>Score: %{{y:,.0f}}<extra></extra>"
-                    ),
-                ))
+    if category == "RAM":
+        # RAM has no PassMark scores — show Speed (MHz) vs Latest Price scatter
+        _pp_title    = f"{cat_label} — Speed vs Price (MHz / USD)"
+        _pp_y_label  = "Speed (MHz)"
+        # Get latest curated price per product
+        _ram_latest: dict = {}
+        if not df_curated.empty:
+            _ram_grp = (df_curated.sort_values("date")
+                        .groupby("model_id").last()
+                        .reset_index())
+            for _, _r in _ram_grp.iterrows():
+                _ram_latest[_r["model_id"]] = float(_r["price_usd"])
+        _type_color = {
+            "DDR5":    CHART_COLORS[0],
+            "DDR4":    CHART_COLORS[1],
+            "HBM3E":   CHART_COLORS[2],
+            "HBM3":    CHART_COLORS[3],
+            "LPDDR5X": CHART_COLORS[4],
+        }
+        for i, (mid, prod) in enumerate(RAM_PRODUCTS.items()):
+            speed = prod.get("speed_mhz")
+            price = _ram_latest.get(mid) or prod.get("msrp_usd")
+            if speed is None or price is None:
+                continue  # skip HBM stacks with no retail price
+            rtype = prod.get("type", "")
+            col   = _type_color.get(rtype, CHART_COLORS[i % len(CHART_COLORS)])
+            label = prod.get("name", mid)
+            cap   = prod.get("capacity_gb", "?")
+            fig_pp.add_trace(go.Scatter(
+                x=[price], y=[speed],
+                mode="markers+text",
+                name=label,
+                text=[label],
+                textposition="top center",
+                textfont=dict(size=9),
+                marker=dict(size=12, color=col, line=dict(width=1, color="#30363d")),
+                hovertemplate=(
+                    f"<b>{label}</b><br>Price: $%{{x:.0f}}"
+                    f"<br>Speed: %{{y:,}} MHz"
+                    f"<br>Capacity: {cap} GB"
+                    f"<br>Type: {rtype}<extra></extra>"
+                ),
+            ))
+    else:
+        _pp_title   = f"{cat_label} — Performance vs Price (PassMark Score / USD)"
+        _pp_y_label = "PassMark Score"
+        if not df_pass.empty:
+            latest_pass = df_pass.dropna(subset=["passmark_score", "price_usd"])
+            latest_pass = (latest_pass.sort_values("date")
+                           .groupby("model_id").last()
+                           .reset_index())
+            if not latest_pass.empty:
+                for i, row in latest_pass.iterrows():
+                    brand = row.get("brand", "")
+                    col   = COLOR_MAP.get(brand, CHART_COLORS[i % len(CHART_COLORS)])
+                    fig_pp.add_trace(go.Scatter(
+                        x=[row["price_usd"]], y=[row["passmark_score"]],
+                        mode="markers+text",
+                        name=row.get("name", row["model_id"]),
+                        text=[row.get("name", row["model_id"])],
+                        textposition="top center",
+                        textfont=dict(size=9),
+                        marker=dict(size=12, color=col, line=dict(width=1, color="#30363d")),
+                        hovertemplate=(
+                            f"<b>%{{text}}</b><br>Price: $%{{x:.0f}}"
+                            f"<br>Score: %{{y:,.0f}}<extra></extra>"
+                        ),
+                    ))
     fig_pp.update_layout(
         **PLOTLY_TEMPLATE["layout"],
-        title=f"{cat_label} — Performance vs Price (PassMark Score / USD)",
+        title=_pp_title,
         height=320, xaxis_title="Retail Price (USD)",
-        yaxis_title="PassMark Score", showlegend=False,
+        yaxis_title=_pp_y_label, showlegend=False,
     )
 
     # ── Latest Prices & Year-on-Year Change table ─────────────────────────
-    yoy_section = html.Span()   # empty by default
-    if not df_hist.empty:
+    yoy_section = html.Span()   # empty by default; skipped for RAM (DRAM inline section serves this role)
+    if category != "RAM" and not df_hist.empty:
         # Latest price per product and price ~12 months prior
         latest_snap = (df_hist.sort_values("date")
                        .groupby("model_id")
@@ -2536,10 +3074,10 @@ def _sc_price_section(category: str):
             tbl,
         ])
 
-    # ── For RAM: embed DRAM & HBM spot prices inline ──────────────────────
+    # ── For RAM: embed DRAM & HBM spot prices inline (expanded height) ───
     dram_section = html.Span()
     if category == "RAM":
-        dram_section = _sc_dram_inline()
+        dram_section = _sc_dram_inline(height=500)
 
     return html.Div([
         dbc.Row([
