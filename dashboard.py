@@ -1958,15 +1958,27 @@ def _sc_vs_etf_panel():
                          "top left"]
     for _i, (lcat, lshort, _ldesc, ldate) in enumerate(ENTERPRISE_PRODUCT_LAUNCHES):
         _lcol = _LAUNCH_CAT_COLOR.get(lcat, SUBTEXT)
-        fig.add_vline(
-            x=datetime.strptime(ldate, "%Y-%m-%d"),
-            line_width=1,
-            line_dash="dot",
-            line_color=_lcol,
-            annotation_text=f"▲ {lshort}",
-            annotation_position=_launch_positions[_i % len(_launch_positions)],
-            annotation_font_color=_lcol,
-            annotation_font_size=9,
+        # Use add_shape + add_annotation instead of add_vline:
+        # add_vline with annotation_text has a Plotly bug where it tries to
+        # average int(0) with the x value, crashing on both str and datetime.
+        fig.add_shape(
+            type="line",
+            x0=ldate, x1=ldate,
+            y0=0, y1=1,
+            xref="x", yref="paper",
+            line=dict(color=_lcol, width=1, dash="dot"),
+        )
+        _yanchor = "top" if "top" in _launch_positions[_i % len(_launch_positions)] else "bottom"
+        fig.add_annotation(
+            x=ldate,
+            y=0.98 if _yanchor == "top" else 0.02,
+            xref="x", yref="paper",
+            text=f"▲ {lshort}",
+            showarrow=False,
+            font=dict(color=_lcol, size=9),
+            textangle=-90,
+            xanchor="right" if "right" in _launch_positions[_i % len(_launch_positions)] else "left",
+            yanchor=_yanchor,
         )
 
     fig.update_layout(
