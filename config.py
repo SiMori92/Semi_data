@@ -87,7 +87,7 @@ SEMI_ETFS = ["SOXL", "SOXS", "SMH", "SOXX"]
 DB_PATH = os.environ.get("DB_PATH", "semiconductor_data.db")
 
 # ── Crawler settings ──────────────────────────────────────────────────────────
-PRICE_HISTORY_PERIOD = "2y"          # How far back to pull price history
+PRICE_HISTORY_PERIOD = "5y"          # How far back to pull price history (supports 5Y rangeselector)
 LARGE_DROP_THRESHOLD = -0.05         # -5% = "large single-day drop"
 CYCLE_DETECTION_WINDOW = 15          # Rolling window (trading days) for peak/trough detection
 REQUEST_DELAY_SECONDS = 0.5          # Polite delay between Yahoo Finance calls

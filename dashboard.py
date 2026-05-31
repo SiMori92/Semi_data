@@ -1994,10 +1994,13 @@ def _sc_vs_etf_panel():
         hovermode="x unified",
     )
     fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    # Default view: 2Y so curated supply-chain indices (ending ~2025-05) and
+    # the live ETF series are both visible on initial load.
+    # ETF right-edge stays at today; 1Y/3Y/5Y buttons step backward from there.
     fig.update_xaxes(
         type="date",
         rangeselector=_time_rangeselector(active_index=0),   # 1Y default
-        range=[_range_start(1), _now_hkt().strftime("%Y-%m-%d")],
+        range=[_range_start(2), _now_hkt().strftime("%Y-%m-%d")],
         rangeslider=dict(visible=False),
     )
 
@@ -2090,10 +2093,12 @@ def _sc_vs_etf_panel():
                 hovermode="x unified",
             )
             fig_roll.update_yaxes(range=[-1.05, 1.05])
+            # 2Y default so rolling-corr data (limited by curated SC series)
+            # is visible on initial load alongside the live ETF series.
             fig_roll.update_xaxes(
                 type="date",
                 rangeselector=_time_rangeselector(active_index=0),   # 1Y default
-                range=[_range_start(1), _now_hkt().strftime("%Y-%m-%d")],
+                range=[_range_start(2), _now_hkt().strftime("%Y-%m-%d")],
                 rangeslider=dict(visible=False),
             )
         else:
@@ -2331,10 +2336,16 @@ def _sc_dram_inline() -> html.Div:
         title="DRAM & HBM Spot / Contract Prices — DDR4/DDR5 (USD/die) · HBM3E (USD/GB)",
         height=360, xaxis_title="Month", yaxis_title="Price (USD)",
     )
+    # Anchor x-range to actual data end so initial 1Y view is not empty when
+    # curated data lags today.  stepmode="backward" buttons stay relative to
+    # the right edge, so 1Y/3Y/5Y still work correctly.
+    _dram_end_dt  = pd.to_datetime(df.sort_values("period")["period"].iloc[-1][:7] + "-01")
+    _dram_rend    = (_dram_end_dt + pd.DateOffset(months=2)).strftime("%Y-%m-%d")
+    _dram_rstart  = (_dram_end_dt - pd.DateOffset(years=1)).strftime("%Y-%m-%d")
     fig.update_xaxes(
         type="date",
         rangeselector=_time_rangeselector(active_index=0),   # 1Y default
-        range=[_range_start(1), _now_hkt().strftime("%Y-%m-%d")],
+        range=[_dram_rstart, _dram_rend],
         rangeslider=dict(visible=False),
     )
 
@@ -2442,10 +2453,19 @@ def _sc_price_section(category: str):
         title=f"{cat_label} — Price Index (USD)",
         height=360, xaxis_title="Date", yaxis_title="Retail Price (USD)",
     )
+    # Anchor range to actual data end so the default 1Y view is not empty
+    # when curated prices lag today.
+    if not df_hist.empty:
+        _pr_end_dt   = pd.to_datetime(df_hist["date"].max())
+        _pr_rend     = (_pr_end_dt + pd.DateOffset(months=2)).strftime("%Y-%m-%d")
+        _pr_rstart   = (_pr_end_dt - pd.DateOffset(years=1)).strftime("%Y-%m-%d")
+    else:
+        _pr_rend   = _now_hkt().strftime("%Y-%m-%d")
+        _pr_rstart = _range_start(1)
     fig_price.update_xaxes(
         type="date",
         rangeselector=_time_rangeselector(active_index=0),   # 1Y default
-        range=[_range_start(1), _now_hkt().strftime("%Y-%m-%d")],
+        range=[_pr_rstart, _pr_rend],
         rangeslider=dict(visible=False),
     )
 
