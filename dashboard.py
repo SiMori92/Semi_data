@@ -223,7 +223,10 @@ def _time_rangeselector(active_index: int = 0) -> dict:
     """Standard 1Y / 3Y / 5Y Plotly rangeselector.
     Buttons are anchored relative to today (stepmode='backward') so they always
     show the correct window regardless of when the dashboard is opened.
-    active_index: 0=1Y selected by default, 1=3Y, 2=5Y.
+    active_index: kept as a parameter for call-site compatibility but is not
+    passed to Plotly — the 'active' key is not supported by the installed
+    Plotly version (raises ValueError on Rangeselector objects).
+    The displayed window is controlled by xaxis.range instead.
     """
     return dict(
         buttons=[
@@ -231,7 +234,6 @@ def _time_rangeselector(active_index: int = 0) -> dict:
             dict(count=3, label="3Y", step="year", stepmode="backward"),
             dict(count=5, label="5Y", step="year", stepmode="backward"),
         ],
-        active=active_index,
         activecolor=ACCENT,
         bgcolor=BG2,
         bordercolor="#30363d",
