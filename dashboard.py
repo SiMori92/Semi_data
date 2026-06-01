@@ -2254,6 +2254,15 @@ def tab_supply_chain():
                 style={"color": RED, "fontSize": "13px"},
             ))
 
+    def _safe_enterprise_cpu():
+        try:
+            return _sc_enterprise_cpu_section()
+        except Exception as exc:
+            return _card(html.P(
+                f"Error loading Enterprise CPU data: {exc}",
+                style={"color": RED, "fontSize": "13px"},
+            ))
+
     def _safe_enterprise_ram():
         try:
             return _sc_enterprise_ram_section()
@@ -2266,13 +2275,14 @@ def tab_supply_chain():
     # dbc.Tabs renders tab content directly — no server round-trip required.
     # All three sections are built once when the Supply Chain tab is opened.
     # GPU tab: enterprise data-center GPUs (A100/H100/H200/B200/MI300X).
+    # CPU tab: enterprise server CPUs (EPYC Genoa/Turin + Xeon SPR/EMR).
     # RAM tab: enterprise HBM (HBM3/HBM3E) with consumer DRAM section below.
     price_tabs = dbc.Tabs(
         [
             dbc.Tab(_safe_enterprise_gpu(), label="🖥️  GPU (Enterprise)", tab_id="sc-tab-gpu",
                     label_style={"fontSize": "13px", "color": TEXT},
                     active_label_style={"color": ACCENT, "fontWeight": "600"}),
-            dbc.Tab(_safe_price_section("CPU"), label="⚙️  CPU", tab_id="sc-tab-cpu",
+            dbc.Tab(_safe_enterprise_cpu(), label="⚙️  CPU (Enterprise)", tab_id="sc-tab-cpu",
                     label_style={"fontSize": "13px", "color": TEXT},
                     active_label_style={"color": ACCENT, "fontWeight": "600"}),
             dbc.Tab(_safe_enterprise_ram(), label="💾  RAM (Enterprise)", tab_id="sc-tab-ram",
@@ -2285,16 +2295,22 @@ def tab_supply_chain():
 
     return html.Div([
         _card([
-            _section_title("Supply Chain Intelligence"),
+            _section_title("Supply Chain Intelligence — Enterprise Focus"),
             html.P(
-                "Product-level supply chain metrics across GPU, CPU, and RAM. "
-                "Price data: PassMark + Newegg (live).  Volume: Steam HW Survey. "
-                "Orders: SEMI B2B.  Capacity/Occupancy: curated from earnings calls. "
-                "Delivery: Newegg in-stock status.",
+                "Enterprise AI hardware supply chain metrics. "
+                "GPU: NVIDIA AI accelerators (A100 → H100 → H200 → B200) + AMD MI300X — "
+                "contract/spot ASP, generation era pricing, FP16 TFLOPS/$ efficiency. "
+                "CPU: Intel Xeon Platinum + AMD EPYC server flagship SKUs — "
+                "ODP-derived ASP, core count vs price, generation transitions. "
+                "RAM: HBM3 / HBM3E per-stack contract price (SK Hynix / Samsung / Micron) + "
+                "consumer DDR4/DDR5 spot context. "
+                "Macro: SEMI NA equipment Book-to-Bill (leading capacity indicator). "
+                "Fab utilisation: TSMC / Samsung / SK Hynix / Micron / Intel from earnings calls.",
                 style={"color": SUBTEXT, "fontSize": "12px", "margin": "0"},
             ),
             _source_footer(
-                "PassMark / Newegg / Valve (Steam) / SEMI / Company Earnings Transcripts / TrendForce",
+                "NVIDIA / AMD / Intel ODP · TrendForce · SEMI · SK Hynix / Samsung / Micron Earnings · "
+                "Valve Steam HW Survey (consumer context)",
                 "Each panel carries its own source attribution below.",
             ),
         ]),
@@ -2498,8 +2514,8 @@ def _sc_enterprise_gpu_section():
         **PLOTLY_TEMPLATE["layout"],
         title="Enterprise GPU — Estimated Contract/Spot Price (USD/card)",
         height=400, xaxis_title="", yaxis_title="Price (USD / card)",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
+    fig_price.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
 
     # Flagship-era shaded backgrounds
     for (era_label, x0, x1, fill, tc, short) in FLAGSHIP_ERAS:
@@ -2663,6 +2679,222 @@ def _sc_enterprise_gpu_section():
     ])
 
 
+def _sc_enterprise_cpu_section():
+    """
+    Enterprise / Data-Center CPU price index with:
+    - Per-SKU contract ASP history for EPYC Genoa, Xeon SPR, Xeon EMR, EPYC Turin
+    - Generation era shaded bands (Genoa/SPR → EMR/Turin)
+    - CPU GA vertical annotations
+    - Core count vs latest price scatter (enterprise proxy for performance/$ value)
+    - YoY price change table
+    """
+    df_curated = sc_prices_query("CPU-Enterprise", source="curated")
+
+    # ── Generation era definitions ────────────────────────────────────────────
+    CPU_ERAS = [
+        ("Genoa + SPR Era",  "2022-11-01", "2023-12-31", "rgba(237,28,36,0.06)",   "#ED1C24", "Genoa/SPR"),
+        ("EMR + Turin Era",  "2024-01-01", "2026-07-31", "rgba(0,113,197,0.06)",   "#0071C5", "EMR/Turin"),
+    ]
+    CPU_GA_MARKERS = [
+        ("2022-11-01", "EPYC 9654 GA\n(Genoa, Zen 4)",         "#ED1C24"),
+        ("2023-01-01", "Xeon 8490H GA\n(Sapphire Rapids)",     "#9d7dea"),
+        ("2024-01-01", "Xeon 8592+ GA\n(Emerald Rapids)",      "#0071C5"),
+        ("2024-10-01", "EPYC 9965 GA\n(Turin, Zen 5)",         "#00C8B4"),
+    ]
+    COLOR_BY_MODEL = {
+        "EPYC-9654":  "#ED1C24",
+        "Xeon-8490H": "#9d7dea",
+        "Xeon-8592+": "#0071C5",
+        "EPYC-9965":  "#00C8B4",
+    }
+
+    # ── Price history line chart ──────────────────────────────────────────────
+    fig_price = go.Figure()
+    if not df_curated.empty:
+        for mid, grp in df_curated.groupby("model_id"):
+            grp = grp.sort_values("date")
+            prod_name = grp["name"].iloc[0] if "name" in grp.columns else mid
+            col = COLOR_BY_MODEL.get(mid, CHART_COLORS[0])
+            fig_price.add_trace(go.Scatter(
+                x=grp["date"], y=grp["price_usd"],
+                name=prod_name, mode="lines+markers",
+                line=dict(width=2.5, color=col),
+                marker=dict(size=4),
+                hovertemplate=(
+                    f"<b>{prod_name}</b><br>%{{x|%b %Y}}<br>"
+                    f"Price: $%{{y:,.0f}}<extra></extra>"
+                ),
+            ))
+
+    fig_price.update_layout(
+        **PLOTLY_TEMPLATE["layout"],
+        title="Enterprise CPU — Estimated ODP / Contract ASP (USD/socket)",
+        height=400, xaxis_title="", yaxis_title="Price (USD / socket)",
+    )
+    fig_price.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
+
+    for (era_label, x0, x1, fill, tc, short) in CPU_ERAS:
+        fig_price.add_vrect(
+            x0=x0, x1=x1, fillcolor=fill, line_width=0,
+            annotation_text=short, annotation_position="top left",
+            annotation=dict(font_size=10, font_color=tc, yshift=-14),
+        )
+    for (ga_date, label, col) in CPU_GA_MARKERS:
+        fig_price.add_vline(
+            x=ga_date, line_dash="dot", line_color=col, line_width=1.5,
+            annotation_text=f"◆ {label}",
+            annotation_position="top right",
+            annotation=dict(font_size=9, font_color=col, textangle=-90, yshift=-10),
+        )
+
+    if not df_curated.empty:
+        _pr_end_dt = pd.to_datetime(df_curated["date"].max())
+        _pr_rend   = (_pr_end_dt + pd.DateOffset(months=2)).strftime("%Y-%m-%d")
+        _pr_rstart = (_pr_end_dt - pd.DateOffset(years=2)).strftime("%Y-%m-%d")
+    else:
+        _pr_rend   = _now_hkt().strftime("%Y-%m-%d")
+        _pr_rstart = _range_start(2)
+    fig_price.update_xaxes(
+        type="date",
+        rangeselector=_time_rangeselector(active_index=1),   # 3Y default
+        range=[_pr_rstart, _pr_rend],
+        rangeslider=dict(visible=False),
+    )
+
+    # ── Core Count vs Latest Price scatter (enterprise perf/$) ──────────────
+    fig_perf = go.Figure()
+    if not df_curated.empty:
+        latest_price = (
+            df_curated.sort_values("date")
+            .groupby("model_id")[["price_usd", "name"]]
+            .last()
+            .reset_index()
+        )
+        for _, row in latest_price.iterrows():
+            mid  = row["model_id"]
+            prod = CPU_ENTERPRISE_PRODUCTS.get(mid, {})
+            cores = prod.get("cores")
+            if cores is None or pd.isna(row["price_usd"]):
+                continue
+            col       = COLOR_BY_MODEL.get(mid, CHART_COLORS[0])
+            prod_name = row["name"] if pd.notna(row.get("name")) else mid
+            tdp       = prod.get("tdp_w", "—")
+            fig_perf.add_trace(go.Scatter(
+                x=[row["price_usd"]], y=[cores],
+                mode="markers+text",
+                name=prod_name,
+                text=[prod_name],
+                textposition="top center",
+                textfont=dict(size=9),
+                marker=dict(size=14, color=col, line=dict(width=1, color="#30363d")),
+                hovertemplate=(
+                    f"<b>{prod_name}</b><br>Latest price: $%{{x:,.0f}}<br>"
+                    f"Cores: {cores}  TDP: {tdp}W<extra></extra>"
+                ),
+            ))
+    fig_perf.update_layout(
+        **PLOTLY_TEMPLATE["layout"],
+        title="Enterprise CPU — Core Count vs Latest Price",
+        height=360,
+        xaxis_title="Latest Contract ASP (USD / socket)",
+        yaxis_title="Physical Cores",
+        showlegend=False,
+    )
+
+    # ── YoY price change table ────────────────────────────────────────────────
+    yoy_section = html.Span()
+    if not df_curated.empty:
+        latest_snap = (
+            df_curated.sort_values("date")
+            .groupby("model_id")
+            .last()
+            .reset_index()[["model_id", "date", "price_usd"]]
+        )
+        _cutoff_1y = (pd.Timestamp(_now_hkt()) - pd.DateOffset(months=12)).strftime("%Y-%m-%d")
+        hist_1y = (
+            df_curated[df_curated["date"] <= _cutoff_1y]
+            .sort_values("date")
+            .groupby("model_id")["price_usd"]
+            .last()
+            .rename("price_1y_ago")
+        )
+        yoy_df = (
+            latest_snap
+            .merge(df_curated[["model_id", "name"]].drop_duplicates("model_id"),
+                   on="model_id", how="left")
+            .merge(hist_1y, on="model_id", how="left")
+        )
+        yoy_df["YoY Δ"] = yoy_df.apply(
+            lambda r: f"{(r['price_usd'] / r['price_1y_ago'] - 1) * 100:+.1f}%"
+                      if pd.notna(r.get("price_1y_ago")) and r["price_1y_ago"] > 0 else "—",
+            axis=1,
+        )
+        yoy_df["Generation"] = yoy_df["model_id"].map({
+            "EPYC-9654":  "Genoa (Zen 4)",
+            "Xeon-8490H": "Sapphire Rapids",
+            "Xeon-8592+": "Emerald Rapids",
+            "EPYC-9965":  "Turin (Zen 5)",
+        }).fillna("—")
+        yoy_df["Cores"] = yoy_df["model_id"].map(
+            {mid: str(p.get("cores", "—")) for mid, p in CPU_ENTERPRISE_PRODUCTS.items()}
+        ).fillna("—")
+        yoy_df["TDP (W)"] = yoy_df["model_id"].map(
+            {mid: str(p.get("tdp_w", "—")) for mid, p in CPU_ENTERPRISE_PRODUCTS.items()}
+        ).fillna("—")
+        yoy_df = yoy_df.rename(columns={
+            "name": "Product", "date": "As of",
+            "price_usd": "Latest Price (USD)", "price_1y_ago": "Price 1Y Ago (USD)",
+        })
+        yoy_df["Latest Price (USD)"]  = yoy_df["Latest Price (USD)"].map(
+            lambda x: f"${x:,.0f}" if pd.notna(x) else "—")
+        yoy_df["Price 1Y Ago (USD)"]  = yoy_df["Price 1Y Ago (USD)"].map(
+            lambda x: f"${x:,.0f}" if pd.notna(x) else "—")
+        yoy_df = yoy_df[[
+            "Product", "Generation", "Cores", "TDP (W)",
+            "Latest Price (USD)", "Price 1Y Ago (USD)", "YoY Δ",
+        ]]
+        yoy_tbl = dash_table.DataTable(
+            data=yoy_df.to_dict("records"),
+            columns=[{"name": c, "id": c} for c in yoy_df.columns],
+            sort_action="native",
+            style_table={"overflowX": "auto"},
+            style_cell={"backgroundColor": BG3, "color": TEXT,
+                        "border": "1px solid #30363d",
+                        "fontSize": "13px", "padding": "6px 10px"},
+            style_header={"backgroundColor": BG2, "color": ACCENT,
+                          "fontWeight": "600", "border": "1px solid #30363d"},
+            style_data_conditional=[
+                {"if": {"row_index": "odd"}, "backgroundColor": BG2},
+                {"if": {"filter_query": '{YoY Δ} contains "+"', "column_id": "YoY Δ"},
+                 "color": GREEN, "fontWeight": "600"},
+                {"if": {"filter_query": '{YoY Δ} contains "-"', "column_id": "YoY Δ"},
+                 "color": RED, "fontWeight": "600"},
+            ],
+        )
+        yoy_section = _card([
+            _section_title("Enterprise CPU — Latest Prices & Year-on-Year Change"),
+            yoy_tbl,
+        ])
+
+    return html.Div([
+        dbc.Row([
+            dbc.Col(_card(dcc.Graph(figure=fig_price, config={"displayModeBar": True})), width=7),
+            dbc.Col(_card(dcc.Graph(figure=fig_perf,  config={"displayModeBar": True})), width=5),
+        ]),
+        yoy_section,
+        _card(_source_footer(
+            "AMD / Intel Official Distributor Price (ODP) · TrendForce Server CPU Channel Estimates · "
+            "Gartner / IDC Server Market Research",
+            "Prices are per-socket ODP-derived contract ASP estimates (USD). "
+            "Not consumer/retail — enterprise CPUs are sold direct to OEMs and hyperscalers. "
+            "Core counts from official product launch data. "
+            "Generations: Genoa (EPYC 9004, Nov 2022) → Sapphire Rapids (Xeon Gen 4, Jan 2023) → "
+            "Emerald Rapids (Xeon Gen 5, Jan 2024) → Turin (EPYC 9005, Oct 2024). "
+            "Update CPU_ENTERPRISE_PRODUCTS in products_config.py quarterly.",
+        )),
+    ])
+
+
 def _sc_enterprise_ram_section():
     """
     Enterprise / AI-accelerator HBM price index with:
@@ -2717,8 +2949,8 @@ def _sc_enterprise_ram_section():
         **PLOTLY_TEMPLATE["layout"],
         title="Enterprise RAM (HBM) — Estimated Contract Price (USD/GB)",
         height=400, xaxis_title="", yaxis_title="Contract Price (USD / GB)",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
+    fig_price.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
 
     for (era_label, x0, x1, fill, tc, short) in HBM_ERAS:
         fig_price.add_vrect(
@@ -3164,18 +3396,28 @@ def _sc_steam_panel():
                            title="GPU Vendor Share", height=300)
 
     return _card([
-        _section_title("Sales Volume — GPU Market Share (Steam Hardware Survey)"),
+        _section_title("Consumer GPU Market Share — Steam Hardware Survey (Context Only)"),
+        html.P(
+            "⚠ This panel shows consumer/gaming GPU installed-base share — not enterprise datacenter shipments. "
+            "It is included as a vendor market-presence proxy: NVIDIA's dominant gaming share (≈90 %) "
+            "reinforces its pricing power in enterprise AI channels. "
+            "For enterprise GPU unit shipments, refer to IDC / Mercury Research datacenter reports.",
+            style={"color": YELLOW, "fontSize": "12px", "marginBottom": "10px",
+                   "padding": "8px", "border": f"1px solid {YELLOW}",
+                   "borderRadius": "4px", "backgroundColor": "rgba(255,200,0,0.05)"},
+        ),
         dbc.Row([
             dbc.Col(dcc.Graph(figure=fig,     config={"displayModeBar": False}), width=8),
             dbc.Col(dcc.Graph(figure=fig_pie, config={"displayModeBar": False}), width=4),
         ]),
         html.P(
-            "Note: Steam survey reflects the installed base of active gamers, not monthly units shipped. "
-            "Use as a relative market share proxy; absolute sales volumes require IDC/Mercury Research data.",
+            "Steam survey reflects installed base of active gamers (~120M users), not monthly units shipped. "
+            "Use as a relative vendor market-presence proxy only; "
+            "enterprise AI GPU shipment volumes require IDC / Mercury Research data.",
             style={"color": SUBTEXT, "fontSize": "11px", "marginTop": "8px"},
         ),
         _source_footer("Valve / Steam Hardware Survey",
-                       "Monthly survey of ~120M active Steam users. Reflects installed base, not shipment volumes."),
+                       "Monthly survey of ~120M active Steam users. Consumer/gaming data — not enterprise AI GPU shipments."),
     ])
 
 
