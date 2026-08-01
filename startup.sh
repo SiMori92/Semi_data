@@ -6,6 +6,63 @@ DATA_DIR="$(dirname "$DB_PATH")"
 mkdir -p "$DATA_DIR"
 echo "=== DB_PATH: $DB_PATH ==="
 
+# ── Persistent-volume guard ──────────────────────────────────────────────────
+# Railway injects RAILWAY_VOLUME_MOUNT_PATH at *runtime* whenever a volume is
+# attached. If DB_PATH does not live inside that path, `mkdir -p` silently
+# creates the directory on the container's ephemeral layer instead: the app
+# boots, /health returns ok, the crawlers re-seed, and every accumulated row is
+# lost on the next redeploy with no visible symptom. That silent re-seed — not
+# the volume itself — is the actual failure mode. Detect it and refuse to
+# pretend everything is fine.
+#
+# Locally (no RAILWAY_* vars) the working directory is genuinely persistent,
+# so the guard stays quiet.
+VOLUME_OK=1
+VOLUME_REASON="ok"
+
+if [ -n "$RAILWAY_VOLUME_MOUNT_PATH" ]; then
+    case "$DB_PATH" in
+        "$RAILWAY_VOLUME_MOUNT_PATH"/*) ;;
+        *)
+            VOLUME_OK=0
+            VOLUME_REASON="DB_PATH ($DB_PATH) is outside the mounted volume ($RAILWAY_VOLUME_MOUNT_PATH)"
+            ;;
+    esac
+elif [ -n "$RAILWAY_ENVIRONMENT_NAME" ] || [ -n "$RAILWAY_SERVICE_ID" ] \
+     || [ -n "$RAILWAY_PROJECT_ID" ]; then
+    VOLUME_OK=0
+    VOLUME_REASON="running on Railway but no volume is attached (RAILWAY_VOLUME_MOUNT_PATH is unset)"
+fi
+
+# Backstop: a real mount sits on a different device than /. If the device IDs
+# match, the "volume" is just a directory on the container filesystem.
+if [ "$VOLUME_OK" = "1" ] && [ -n "$RAILWAY_VOLUME_MOUNT_PATH" ]; then
+    ROOT_DEV="$(stat -c %d /          2>/dev/null || echo unknown-root)"
+    DATA_DEV="$(stat -c %d "$DATA_DIR" 2>/dev/null || echo unknown-data)"
+    if [ "$ROOT_DEV" = "$DATA_DEV" ]; then
+        VOLUME_OK=0
+        VOLUME_REASON="$DATA_DIR is on the same device as / — the volume is not actually mounted"
+    fi
+fi
+
+# Passed to gunicorn via the environment; dashboard.py surfaces it on /health,
+# /api/db-stats, and as a red navbar banner.
+export SEMI_VOLUME_OK="$VOLUME_OK"
+export SEMI_VOLUME_REASON="$VOLUME_REASON"
+
+if [ "$VOLUME_OK" = "0" ]; then
+    echo "########################################################################"
+    echo "# EPHEMERAL STORAGE DETECTED — DATA WILL NOT SURVIVE THE NEXT REDEPLOY  #"
+    echo "# $VOLUME_REASON"
+    echo "# Fix: Railway -> service -> Settings -> Volumes. Mount a volume and"
+    echo "# make DB_PATH point inside it (e.g. mount /data, DB_PATH=/data/semiconductor_data.db)."
+    echo "# Skipping the full seed crawl so this failure stays visible."
+    echo "# Set SEMI_ALLOW_EPHEMERAL_SEED=1 to seed anyway (throwaway/preview envs)."
+    echo "########################################################################"
+else
+    echo "=== Volume guard: OK (data directory is persistent) ==="
+fi
+
 # ── Always reload curated data (idempotent — INSERT OR REPLACE, zero network) ─
 # This ensures curated GPU/CPU/RAM retail prices, DRAM spot, capacity, and
 # SEMI B2B data are always current with products_config.py on every deploy,
@@ -30,7 +87,11 @@ except Exception as e:
 echo "=== Rows in daily_prices: $ROW_COUNT ==="
 
 # ── Run full crawlers only if database has no price data yet ──────────────────
-if [ "$ROW_COUNT" -eq 0 ] 2>/dev/null; then
+# On ephemeral storage the seed is skipped: it would burn ~3 min of the
+# healthcheck window and, worse, make a broken deploy look completely normal.
+if [ "$VOLUME_OK" = "0" ] && [ "$SEMI_ALLOW_EPHEMERAL_SEED" != "1" ]; then
+    echo "=== Seed crawl SKIPPED — storage is ephemeral (see volume guard above) ==="
+elif [ "$ROW_COUNT" -eq 0 ] 2>/dev/null; then
     echo "=== No price data found — running full crawlers now (takes ~3 min) ==="
 
     echo "--- Running crawler.py --quick ---"

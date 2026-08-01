@@ -237,8 +237,13 @@ def fetch_and_store_prices(
             columns={"Open": "open", "High": "high", "Low": "low",
                      "Close": "close", "Volume": "volume"}
         )
+        # OR REPLACE (not OR IGNORE): yfinance retroactively re-adjusts the full
+        # OHLCV history after a stock split. With OR IGNORE the pre-split rows
+        # would survive forever, leaving a permanent artificial cliff in every
+        # chart at the split date. REPLACE keeps the series internally consistent
+        # and is still idempotent — PK is (ticker, date).
         conn.executemany(
-            "INSERT OR IGNORE INTO daily_prices VALUES (?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO daily_prices VALUES (?,?,?,?,?,?,?)",
             rows.itertuples(index=False, name=None),
         )
         conn.commit()

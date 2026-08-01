@@ -8,6 +8,7 @@ Run:
 Then open http://127.0.0.1:8050 in your browser.
 """
 
+import os
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -53,6 +54,38 @@ RED      = "#f85149"
 YELLOW   = "#d29922"
 TEXT     = "#e6edf3"
 SUBTEXT  = "#8b949e"
+
+# ── Persistent-volume status (set by startup.sh — see its volume guard) ───────
+# Defaults to OK so local dev and any non-Railway host stay quiet.
+VOLUME_OK     = os.environ.get("SEMI_VOLUME_OK", "1") != "0"
+VOLUME_REASON = os.environ.get("SEMI_VOLUME_REASON", "ok")
+
+
+def _volume_banner():
+    """Full-width red banner shown only when the DB is on ephemeral storage.
+
+    Static (env vars cannot change without a restart), so it is built at layout
+    time with no callback — keeps it clear of Hard Rules 3 and 4.
+    """
+    if VOLUME_OK:
+        return None
+    return html.Div(
+        [
+            html.Span("⚠️ EPHEMERAL STORAGE — DATA WILL BE LOST ON REDEPLOY",
+                      style={"fontWeight": "700", "marginRight": "12px"}),
+            html.Span(VOLUME_REASON, style={"opacity": "0.9"}),
+            html.Span(
+                "  Fix: Railway → service → Settings → Volumes, then point "
+                "DB_PATH inside the mount.",
+                style={"opacity": "0.75", "marginLeft": "12px"},
+            ),
+        ],
+        style={
+            "background": RED, "color": "#ffffff", "padding": "8px 20px",
+            "fontSize": "12.5px", "letterSpacing": "0.2px",
+            "borderBottom": "1px solid #7d1d17",
+        },
+    )
 
 PLOTLY_TEMPLATE = dict(
     layout=dict(
@@ -367,6 +400,16 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
                 dbc.Button("⚡ Run Crawl", id="btn-run-crawl", color="warning",
                            size="sm", style={"marginLeft": "8px", "fontSize": "12px"},
                            title="Fetch fresh market data from Yahoo Finance (takes ~2 min)"),
+                # ── Full-dataset export ────────────────────────────────────
+                # Plain anchor, not a Dash callback: the browser streams the
+                # file straight from /api/export-xlsx, so the workbook is never
+                # base64-inflated through a callback response.
+                dbc.Button("⬇️ Download Data", id="btn-download-data",
+                           href="/api/export-xlsx", external_link=True,
+                           color="success", size="sm",
+                           style={"marginLeft": "8px", "fontSize": "12px"},
+                           title="Download the full accumulated dataset "
+                                 "(all tables, multi-sheet Excel workbook)"),
             ], style={"display": "flex", "alignItems": "center", "gap": "0"}),
             # ── Run-crawl status toast ────────────────────────────────────────
             dbc.Toast(
@@ -381,6 +424,9 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
         color=BG2, dark=True,
         style={"borderBottom": f"1px solid #30363d", "padding": "10px 20px"}
     ),
+
+    # ── Ephemeral-storage warning (renders only when the guard tripped) ───────
+    _volume_banner(),
 
     dbc.Row(style={"margin": "0"}, children=[
 
@@ -3745,7 +3791,7 @@ import os
 import json
 import hashlib
 import hmac
-from flask import request as flask_request, jsonify
+from flask import request as flask_request, jsonify, send_file
 
 # API key for the IBKR relay — set RELAY_API_KEY env var on the cloud host.
 # The same key must be set in ibkr_relay.py on your local machine.
@@ -3754,8 +3800,120 @@ _RELAY_API_KEY = os.environ.get("RELAY_API_KEY", "")
 
 @server.route("/health")
 def health():
-    """Health-check endpoint used by Railway / Render / Fly.io uptime probes."""
-    return jsonify({"status": "ok", "db": os.path.exists(DB_PATH)}), 200
+    """Health-check endpoint used by Railway / Render / Fly.io uptime probes.
+
+    `db: true` only means the file exists — it is true on ephemeral storage too,
+    which is exactly how a wiped volume used to pass unnoticed. `volume_ok`
+    reports whether that file is actually on a persistent mount. The probe still
+    returns 200 when the volume is bad: the deploy should stay up and shout,
+    not fall over (the dashboard is read-mostly and still usable).
+    """
+    return jsonify({
+        "status":        "ok",
+        "db":            os.path.exists(DB_PATH),
+        "volume_ok":     VOLUME_OK,
+        "volume_reason": VOLUME_REASON,
+    }), 200
+
+
+# ── Full-dataset export ───────────────────────────────────────────────────────
+# Sheet-name overrides: Excel caps sheet names at 31 chars and forbids []:*?/\
+_EXPORT_SHEET_NAMES = {
+    "quarterly_financials": "Quarterly Financials",
+    "market_sentiment":     "Market Sentiment",
+    "cycle_analysis":       "Cycle Analysis",
+    "daily_prices":         "Daily Prices",
+    "company_info":         "Company Info",
+    "crawl_runs":           "Crawl Runs",
+    "sc_prices":            "SC Prices",
+    "sc_products":          "SC Products",
+    "sc_market_share":      "SC Market Share",
+    "sc_semi_btb":          "SC Book-to-Bill",
+    "sc_dram_spot":         "SC DRAM Spot",
+    "sc_capacity":          "SC Fab Capacity",
+    "options_iv":           "Options IV",
+    "options_iv_history":   "Options IV History",
+}
+
+
+def _export_sheet_name(table: str) -> str:
+    """Map a table name to a legal, readable Excel sheet name (<=31 chars)."""
+    name = _EXPORT_SHEET_NAMES.get(table, table.replace("_", " ").title())
+    for bad in "[]:*?/\\":
+        name = name.replace(bad, "-")
+    return name[:31]
+
+
+@server.route("/api/export-xlsx")
+def export_xlsx():
+    """
+    Download the entire accumulated backend dataset as a multi-sheet .xlsx.
+
+    Public by design — the dashboard already renders this data in charts.
+    Every table in the DB is exported (discovered dynamically, so tables added
+    later are picked up without touching this route). Sheet 1 is a README
+    carrying the export timestamp and per-table row counts, satisfying the
+    timestamp requirement in CLAUDE.md §8.
+
+    Streamed from an in-memory buffer via send_file — no Dash callback, so the
+    payload is never base64-inflated into a callback response.
+    """
+    import io
+
+    try:
+        conn = get_conn()
+        tables = [
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+        ]
+
+        stamp_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        buf = io.BytesIO()
+        summary = []
+
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            # Placeholder so the README lands on sheet 1; rewritten after the loop.
+            pd.DataFrame().to_excel(writer, sheet_name="README", index=False)
+
+            for t in tables:
+                try:
+                    df = pd.read_sql_query(f"SELECT * FROM {t}", conn)
+                except Exception as exc:            # one bad table must not abort
+                    summary.append({"table": t, "rows": 0, "columns": 0,
+                                    "note": f"skipped: {exc}"})
+                    continue
+
+                # Excel hard limit is 1,048,576 rows per sheet.
+                truncated = ""
+                if len(df) > 1_000_000:
+                    df = df.tail(1_000_000)
+                    truncated = "TRUNCATED to most recent 1,000,000 rows"
+
+                df.to_excel(writer, sheet_name=_export_sheet_name(t), index=False)
+                summary.append({"table": t, "rows": len(df),
+                                "columns": len(df.columns), "note": truncated})
+
+            readme = pd.DataFrame(
+                [{"table": "EXPORT GENERATED", "rows": stamp_utc,
+                  "columns": "", "note": "Semiconductor Industry Tracker"},
+                 {"table": "", "rows": "", "columns": "", "note": ""}]
+                + summary
+            )
+            readme.to_excel(writer, sheet_name="README", index=False)
+
+        conn.close()
+        buf.seek(0)
+
+        fname = f"semiconductor_data_{datetime.utcnow():%Y%m%d_%H%M}.xlsx"
+        return send_file(
+            buf, as_attachment=True, download_name=fname,
+            mimetype="application/vnd.openxmlformats-officedocument."
+                     "spreadsheetml.sheet",
+        )
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 @server.route("/api/upload-iv", methods=["POST"])
@@ -3851,7 +4009,11 @@ def db_stats():
         "sc_prices", "sc_market_share", "sc_semi_btb",
         "sc_dram_spot", "sc_capacity", "options_iv",
     ]
-    stats = {}
+    stats = {
+        "volume_ok":     VOLUME_OK,
+        "volume_reason": VOLUME_REASON,
+        "db_path":       DB_PATH,
+    }
     try:
         conn = get_conn()
         for t in tables:
