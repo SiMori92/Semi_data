@@ -14,7 +14,31 @@ TrendForce/DRAMeXchange reports, and SEMI press releases:
 
 NOTE: curated rows carry a 'source' field. Update these each quarter by
       reading the relevant earnings transcripts / SEMI press releases.
+
+Data-provenance vocabulary (BACKLOG.md SC-05): every curated numeric series
+must use one of the three labels below — never a bare institutional name,
+which implies a licensed feed this project does not hold.
 """
+
+# ── Data-Provenance Vocabulary ────────────────────────────────────────────────
+# SRC_PUBLISHED — transcribed from a free, publicly published figure (e.g. a
+#                 TrendForce/DRAMeXchange weekly spot-price article).
+# SRC_MODELED   — derived/inferred, not published anywhere (e.g. HBM contract
+#                 pricing, enterprise GPU/CPU channel pricing — none of these
+#                 are publicly quoted; any number here is this project's
+#                 estimate from secondary commentary).
+# Earnings-sourced rows keep their existing "<Company> Q<n> <YYYY> earnings"
+# format (see CURATED_CAPACITY) — that already names a verifiable primary
+# source and needs no change.
+SRC_PUBLISHED = "TrendForce (public release)"
+SRC_MODELED = "Modeled estimate"
+
+# CURATED_RETAIL_PRICES carries no per-row provenance field (its 3rd tuple
+# element is the sc_prices.source DB column, always "curated" vs. the live
+# "newegg"/"passmark" sources). Enterprise GPU/CPU rows and consumer
+# pre-launch/gap-filled history are both reconstructions, not a feed —
+# dashboard.py labels them with this constant rather than a per-row field.
+CURATED_RETAIL_PROVENANCE = SRC_MODELED
 
 # ── GPU Product Catalog ───────────────────────────────────────────────────────
 # Keys: unique model_id
@@ -423,107 +447,112 @@ CURATED_CAPACITY = [
 ]
 
 # ── Curated DRAM & HBM Spot Prices ───────────────────────────────────────────
-# Source: TrendForce DRAM weekly spot reports (approximated monthly average).
+# DDR4/DDR5 (SRC_PUBLISHED): transcribed from TrendForce/DRAMeXchange's free
+#   weekly spot-price articles (approximated monthly average) — a genuine
+#   public release, just not a licensed feed.
+# HBM3/HBM3E (SRC_MODELED): contract prices are never publicly quoted — these
+#   are this project's estimates from secondary commentary. See SRC_PUBLISHED
+#   / SRC_MODELED above (BACKLOG.md SC-05).
 # DDR4 8Gb 1Gx8 is the industry benchmark die price.
 # DDR5 16Gb 2Gx8 is the emerging benchmark.
 # HBM3E prices are per-GB contract estimates.
 # Format: (product_type, spec_label, period_YYYY-MM, price_usd, source)
 CURATED_DRAM_SPOT = [
     # ── DDR4 8Gb benchmark die ────────────────────────────────────────────────
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-01", 1.20, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-03", 1.05, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-06", 0.92, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-09", 1.10, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-12", 1.40, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-01", 1.65, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-02", 1.85, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-03", 2.05, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-04", 2.30, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-05", 2.55, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-06", 2.75, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-07", 2.90, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-08", 3.05, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-09", 2.95, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-10", 2.80, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-11", 2.70, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-12", 2.65, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-01", 2.60, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-02", 2.55, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-03", 2.50, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-04", 2.48, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-05", 2.45, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-06", 2.40, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-07", 2.35, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-08", 2.30, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-09", 2.25, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-10", 2.20, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-11", 2.15, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-12", 2.12, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-01", 2.10, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-02", 2.08, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-03", 2.06, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-04", 2.04, "TrendForce"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-05", 2.02, "TrendForce"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-01", 1.20, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-03", 1.05, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-06", 0.92, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-09", 1.10, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-12", 1.40, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-01", 1.65, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-02", 1.85, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-03", 2.05, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-04", 2.30, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-05", 2.55, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-06", 2.75, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-07", 2.90, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-08", 3.05, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-09", 2.95, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-10", 2.80, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-11", 2.70, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-12", 2.65, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-01", 2.60, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-02", 2.55, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-03", 2.50, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-04", 2.48, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-05", 2.45, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-06", 2.40, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-07", 2.35, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-08", 2.30, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-09", 2.25, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-10", 2.20, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-11", 2.15, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-12", 2.12, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-01", 2.10, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-02", 2.08, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-03", 2.06, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-04", 2.04, "TrendForce (public release)"),
+    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-05", 2.02, "TrendForce (public release)"),
 
     # ── DDR5 16Gb benchmark die ───────────────────────────────────────────────
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2023-01", 3.20, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2023-06", 2.80, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2023-12", 3.80, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-01", 4.10, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-02", 4.40, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-03", 4.80, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-04", 5.20, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-05", 5.70, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-06", 6.10, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-07", 6.70, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-08", 7.00, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-09", 6.80, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-10", 6.40, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-11", 6.10, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-12", 5.80, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-01", 5.60, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-02", 5.40, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-03", 5.30, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-04", 5.20, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-05", 5.15, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-06", 5.05, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-07", 4.95, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-08", 4.85, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-09", 4.75, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-10", 4.65, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-11", 4.55, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-12", 4.48, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-01", 4.40, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-02", 4.32, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-03", 4.25, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-04", 4.18, "TrendForce"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-05", 4.12, "TrendForce"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2023-01", 3.20, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2023-06", 2.80, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2023-12", 3.80, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-01", 4.10, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-02", 4.40, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-03", 4.80, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-04", 5.20, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-05", 5.70, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-06", 6.10, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-07", 6.70, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-08", 7.00, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-09", 6.80, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-10", 6.40, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-11", 6.10, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-12", 5.80, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-01", 5.60, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-02", 5.40, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-03", 5.30, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-04", 5.20, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-05", 5.15, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-06", 5.05, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-07", 4.95, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-08", 4.85, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-09", 4.75, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-10", 4.65, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-11", 4.55, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-12", 4.48, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-01", 4.40, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-02", 4.32, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-03", 4.25, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-04", 4.18, "TrendForce (public release)"),
+    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-05", 4.12, "TrendForce (public release)"),
 
     # ── HBM3 contract price per GB (8-Hi stack, 2022-06 → 2023-12) ──────────────
     # SK Hynix was sole initial supplier; Samsung qualified late 2022.
     # Prices climbed steadily into 2023 as H100 ramp drove hyperscaler demand.
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2022-06",  8.50, "TrendForce est."),
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2022-09",  9.00, "TrendForce est."),
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2022-12",  9.50, "TrendForce est."),
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2023-03", 10.00, "TrendForce est."),
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2023-06", 10.80, "TrendForce est."),
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2023-09", 11.50, "TrendForce est."),
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2023-12", 11.80, "TrendForce est."),
+    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2022-06",  8.50, "Modeled estimate"),
+    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2022-09",  9.00, "Modeled estimate"),
+    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2022-12",  9.50, "Modeled estimate"),
+    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2023-03", 10.00, "Modeled estimate"),
+    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2023-06", 10.80, "Modeled estimate"),
+    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2023-09", 11.50, "Modeled estimate"),
+    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2023-12", 11.80, "Modeled estimate"),
 
     # ── HBM3E contract price per GB ───────────────────────────────────────────
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-01", 12.00, "TrendForce est."),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-04", 13.50, "TrendForce est."),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-07", 15.00, "TrendForce est."),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-10", 15.80, "TrendForce est."),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-01", 16.50, "TrendForce est."),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-03", 17.00, "TrendForce est."),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-05", 17.20, "TrendForce est."),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-07", 17.40, "TrendForce est."),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-09", 17.60, "TrendForce est."),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-11", 17.80, "TrendForce est."),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-01", 18.00, "TrendForce est."),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-03", 18.20, "TrendForce est."),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-05", 18.40, "TrendForce est."),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-01", 12.00, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-04", 13.50, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-07", 15.00, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-10", 15.80, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-01", 16.50, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-03", 17.00, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-05", 17.20, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-07", 17.40, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-09", 17.60, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-11", 17.80, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-01", 18.00, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-03", 18.20, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-05", 18.40, "Modeled estimate"),
 ]
 
 # ── SEMI North-America Equipment Book-to-Bill ─────────────────────────────────
@@ -531,47 +560,47 @@ CURATED_DRAM_SPOT = [
 # Ratio < 1.00 = billings outpace orders (demand contracting)
 # Source: SEMI monthly press releases (https://www.semi.org/)
 CURATED_SEMI_BTB = [
-    ("2023-01", 0.88, "SEMI NA Equipment B2B"),
-    ("2023-02", 0.87, "SEMI NA Equipment B2B"),
-    ("2023-03", 0.89, "SEMI NA Equipment B2B"),
-    ("2023-04", 0.92, "SEMI NA Equipment B2B"),
-    ("2023-05", 0.95, "SEMI NA Equipment B2B"),
-    ("2023-06", 0.97, "SEMI NA Equipment B2B"),
-    ("2023-07", 0.99, "SEMI NA Equipment B2B"),
-    ("2023-08", 1.01, "SEMI NA Equipment B2B"),
-    ("2023-09", 1.04, "SEMI NA Equipment B2B"),
-    ("2023-10", 1.06, "SEMI NA Equipment B2B"),
-    ("2023-11", 1.09, "SEMI NA Equipment B2B"),
-    ("2023-12", 1.11, "SEMI NA Equipment B2B"),
-    ("2024-01", 1.13, "SEMI NA Equipment B2B"),
-    ("2024-02", 1.10, "SEMI NA Equipment B2B"),
-    ("2024-03", 1.14, "SEMI NA Equipment B2B"),
-    ("2024-04", 1.12, "SEMI NA Equipment B2B"),
-    ("2024-05", 1.16, "SEMI NA Equipment B2B"),
-    ("2024-06", 1.19, "SEMI NA Equipment B2B"),
-    ("2024-07", 1.17, "SEMI NA Equipment B2B"),
-    ("2024-08", 1.20, "SEMI NA Equipment B2B"),
-    ("2024-09", 1.23, "SEMI NA Equipment B2B"),
-    ("2024-10", 1.25, "SEMI NA Equipment B2B"),
-    ("2024-11", 1.22, "SEMI NA Equipment B2B"),
-    ("2024-12", 1.27, "SEMI NA Equipment B2B"),
-    ("2025-01", 1.30, "SEMI NA Equipment B2B"),
-    ("2025-02", 1.28, "SEMI NA Equipment B2B"),
-    ("2025-03", 1.31, "SEMI NA Equipment B2B"),
-    ("2025-04", 1.29, "SEMI NA Equipment B2B"),
-    ("2025-05", 1.33, "SEMI NA Equipment B2B"),
-    ("2025-06", 1.35, "SEMI NA Equipment B2B"),
-    ("2025-07", 1.32, "SEMI NA Equipment B2B"),
-    ("2025-08", 1.34, "SEMI NA Equipment B2B"),
-    ("2025-09", 1.37, "SEMI NA Equipment B2B"),
-    ("2025-10", 1.39, "SEMI NA Equipment B2B"),
-    ("2025-11", 1.36, "SEMI NA Equipment B2B"),
-    ("2025-12", 1.41, "SEMI NA Equipment B2B"),
-    ("2026-01", 1.38, "SEMI NA Equipment B2B"),
-    ("2026-02", 1.40, "SEMI NA Equipment B2B"),
-    ("2026-03", 1.43, "SEMI NA Equipment B2B"),
-    ("2026-04", 1.41, "SEMI NA Equipment B2B"),
-    ("2026-05", 1.44, "SEMI NA Equipment B2B"),
+    ("2023-01", 0.88, "Modeled estimate — NOT a SEMI publication"),
+    ("2023-02", 0.87, "Modeled estimate — NOT a SEMI publication"),
+    ("2023-03", 0.89, "Modeled estimate — NOT a SEMI publication"),
+    ("2023-04", 0.92, "Modeled estimate — NOT a SEMI publication"),
+    ("2023-05", 0.95, "Modeled estimate — NOT a SEMI publication"),
+    ("2023-06", 0.97, "Modeled estimate — NOT a SEMI publication"),
+    ("2023-07", 0.99, "Modeled estimate — NOT a SEMI publication"),
+    ("2023-08", 1.01, "Modeled estimate — NOT a SEMI publication"),
+    ("2023-09", 1.04, "Modeled estimate — NOT a SEMI publication"),
+    ("2023-10", 1.06, "Modeled estimate — NOT a SEMI publication"),
+    ("2023-11", 1.09, "Modeled estimate — NOT a SEMI publication"),
+    ("2023-12", 1.11, "Modeled estimate — NOT a SEMI publication"),
+    ("2024-01", 1.13, "Modeled estimate — NOT a SEMI publication"),
+    ("2024-02", 1.10, "Modeled estimate — NOT a SEMI publication"),
+    ("2024-03", 1.14, "Modeled estimate — NOT a SEMI publication"),
+    ("2024-04", 1.12, "Modeled estimate — NOT a SEMI publication"),
+    ("2024-05", 1.16, "Modeled estimate — NOT a SEMI publication"),
+    ("2024-06", 1.19, "Modeled estimate — NOT a SEMI publication"),
+    ("2024-07", 1.17, "Modeled estimate — NOT a SEMI publication"),
+    ("2024-08", 1.20, "Modeled estimate — NOT a SEMI publication"),
+    ("2024-09", 1.23, "Modeled estimate — NOT a SEMI publication"),
+    ("2024-10", 1.25, "Modeled estimate — NOT a SEMI publication"),
+    ("2024-11", 1.22, "Modeled estimate — NOT a SEMI publication"),
+    ("2024-12", 1.27, "Modeled estimate — NOT a SEMI publication"),
+    ("2025-01", 1.30, "Modeled estimate — NOT a SEMI publication"),
+    ("2025-02", 1.28, "Modeled estimate — NOT a SEMI publication"),
+    ("2025-03", 1.31, "Modeled estimate — NOT a SEMI publication"),
+    ("2025-04", 1.29, "Modeled estimate — NOT a SEMI publication"),
+    ("2025-05", 1.33, "Modeled estimate — NOT a SEMI publication"),
+    ("2025-06", 1.35, "Modeled estimate — NOT a SEMI publication"),
+    ("2025-07", 1.32, "Modeled estimate — NOT a SEMI publication"),
+    ("2025-08", 1.34, "Modeled estimate — NOT a SEMI publication"),
+    ("2025-09", 1.37, "Modeled estimate — NOT a SEMI publication"),
+    ("2025-10", 1.39, "Modeled estimate — NOT a SEMI publication"),
+    ("2025-11", 1.36, "Modeled estimate — NOT a SEMI publication"),
+    ("2025-12", 1.41, "Modeled estimate — NOT a SEMI publication"),
+    ("2026-01", 1.38, "Modeled estimate — NOT a SEMI publication"),
+    ("2026-02", 1.40, "Modeled estimate — NOT a SEMI publication"),
+    ("2026-03", 1.43, "Modeled estimate — NOT a SEMI publication"),
+    ("2026-04", 1.41, "Modeled estimate — NOT a SEMI publication"),
+    ("2026-05", 1.44, "Modeled estimate — NOT a SEMI publication"),
 ]
 
 # ── Curated Steam Hardware Survey — GPU Installed-Base Market Share ───────────
@@ -580,34 +609,69 @@ CURATED_SEMI_BTB = [
 # Format: (model_name, period_YYYY-MM, share_pct, source)
 # Update monthly. The Steam page is JS-rendered so the live crawler uses curated seed.
 CURATED_STEAM_SURVEY = [
-    # ── March 2025 snapshot (Source: Steam Hardware Survey, published Apr 2025) ─
-    ("NVIDIA GeForce RTX 4060",         "2025-03",  9.24, "Steam HW Survey"),
-    ("NVIDIA GeForce GTX 1650",         "2025-03",  6.81, "Steam HW Survey"),
-    ("NVIDIA GeForce RTX 3060",         "2025-03",  6.34, "Steam HW Survey"),
-    ("NVIDIA GeForce RTX 4070",         "2025-03",  5.82, "Steam HW Survey"),
-    ("NVIDIA GeForce RTX 4090",         "2025-03",  5.19, "Steam HW Survey"),
-    ("NVIDIA GeForce RTX 4060 Ti",      "2025-03",  4.83, "Steam HW Survey"),
-    ("NVIDIA GeForce RTX 3060 Ti",      "2025-03",  4.12, "Steam HW Survey"),
-    ("NVIDIA GeForce RTX 4070 Ti",      "2025-03",  3.74, "Steam HW Survey"),
-    ("NVIDIA GeForce RTX 4070 SUPER",   "2025-03",  3.31, "Steam HW Survey"),
-    ("NVIDIA GeForce RTX 4070 Ti SUPER","2025-03",  2.97, "Steam HW Survey"),
-    ("NVIDIA GeForce RTX 3080",         "2025-03",  2.43, "Steam HW Survey"),
-    ("NVIDIA GeForce RTX 3070",         "2025-03",  2.51, "Steam HW Survey"),
-    ("NVIDIA GeForce RTX 2060",         "2025-03",  2.84, "Steam HW Survey"),
-    ("NVIDIA GeForce GTX 1060",         "2025-03",  1.83, "Steam HW Survey"),
-    ("NVIDIA GeForce RTX 2060 SUPER",   "2025-03",  1.21, "Steam HW Survey"),
-    ("AMD Radeon RX 6600 XT",           "2025-03",  1.54, "Steam HW Survey"),
-    ("AMD Radeon RX 7600",              "2025-03",  1.38, "Steam HW Survey"),
-    ("AMD Radeon RX 6700 XT",           "2025-03",  1.19, "Steam HW Survey"),
-    ("AMD Radeon RX 5700 XT",           "2025-03",  0.94, "Steam HW Survey"),
-    ("AMD Radeon RX 7900 XTX",          "2025-03",  0.71, "Steam HW Survey"),
-    ("Intel Arc A770",                  "2025-03",  0.83, "Steam HW Survey"),
-    ("Intel Arc B580",                  "2025-03",  0.41, "Steam HW Survey"),
+    # ── May 2026 snapshot — "ALL VIDEO CARDS" table, verbatim from Valve ───────
+    # Source: Steam Hardware & Software Survey: May 2026, store.steampowered.com
+    #         /hwsurvey/videocard/  (read 2026-08-02).
+    #
+    # These are shares of ALL Steam users. Do NOT mix in rows from the per-
+    # DirectX-class tables on the same page — those are shares *within* a class
+    # (Intel HD Graphics 4000 shows ~28% under "DIRECTX 11 GPUS") and would put
+    # a decade-old iGPU at the top of the chart.  See BACKLOG SC-02.
+    #
+    # The previous 2025-03 seed did not match Valve's published figures (it had
+    # RTX 4060 at 9.24% against ~4% actual — apparently renormalised over a
+    # top-N subset). Replaced wholesale rather than extended.
+    ("NVIDIA GeForce RTX 3060",            "2026-05",  4.02, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4060 Laptop GPU", "2026-05",  3.99, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4060",            "2026-05",  3.74, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 3050",            "2026-05",  3.28, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 5070",            "2026-05",  3.09, "Steam HW Survey"),
+    ("NVIDIA GeForce GTX 1650",            "2026-05",  2.70, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 5060",            "2026-05",  2.58, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4060 Ti",         "2026-05",  2.45, "Steam HW Survey"),
+    ("AMD Radeon(TM) Graphics",            "2026-05",  2.42, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 3060 Ti",         "2026-05",  2.27, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 3070",            "2026-05",  2.08, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 5060 Ti",         "2026-05",  2.06, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 3060 Laptop GPU", "2026-05",  1.97, "Steam HW Survey"),
+    ("AMD Radeon Graphics",                "2026-05",  1.89, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 5060 Laptop GPU", "2026-05",  1.83, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4070",            "2026-05",  1.81, "Steam HW Survey"),
+    ("Intel Iris Xe Graphics",             "2026-05",  1.79, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 2060",            "2026-05",  1.77, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 5070 Ti",         "2026-05",  1.73, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4050 Laptop GPU", "2026-05",  1.71, "Steam HW Survey"),
+    ("NVIDIA GeForce GTX 1060",            "2026-05",  1.59, "Steam HW Survey"),
+    ("NVIDIA GeForce GTX 1660 SUPER",      "2026-05",  1.52, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4070 SUPER",      "2026-05",  1.52, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 5080",            "2026-05",  1.47, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 3080",            "2026-05",  1.47, "Steam HW Survey"),
+    ("AMD Radeon RX 7800 XT",              "2026-05",  1.33, "Steam HW Survey"),
+    ("NVIDIA GeForce GTX 1050 Ti",         "2026-05",  1.26, "Steam HW Survey"),
+    ("Intel(R) UHD Graphics",              "2026-05",  1.22, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4070 Laptop GPU", "2026-05",  1.01, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4070 Ti",         "2026-05",  0.98, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 3070 Ti",         "2026-05",  0.97, "Steam HW Survey"),
+    ("NVIDIA GeForce GTX 1660 Ti",         "2026-05",  0.95, "Steam HW Survey"),
+    ("AMD Radeon RX 6600",                 "2026-05",  0.90, "Steam HW Survey"),
+    ("AMD Radeon RX 7600 XT",              "2026-05",  0.84, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 2060 SUPER",      "2026-05",  0.81, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4070 Ti SUPER",   "2026-05",  0.78, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 4090",            "2026-05",  0.76, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 2070 SUPER",      "2026-05",  0.73, "Steam HW Survey"),
+    ("AMD Radeon RX 7900 XTX",             "2026-05",  0.45, "Steam HW Survey"),
+    ("NVIDIA GeForce RTX 5090",            "2026-05",  0.43, "Steam HW Survey"),
 ]
+
 
 # ── Curated Retail Price History ─────────────────────────────────────────────
 # Monthly average retail prices for representative GPU, CPU, and RAM models.
-# Source: Newegg / Amazon historical price tracking, TrendForce retail estimates.
+# Provenance: CURATED_RETAIL_PROVENANCE (= SRC_MODELED) — reconstructed from
+# public Newegg/Amazon listings and general market commentary, NOT a licensed
+# TrendForce feed. Enterprise GPU/CPU rows below (A100/H100/H200/B200/MI300X,
+# EPYC/Xeon) are entirely modeled — no retail channel exists for datacenter
+# silicon. dashboard.py renders CURATED_RETAIL_PROVENANCE in the UI since this
+# table has no per-row provenance field (BACKLOG.md SC-05).
 # Format: (model_id, date_YYYY-MM-DD, source, price_usd, passmark_score, price_perf, in_stock)
 # These are stored in sc_prices with source="curated" to give historical depth
 # for trend charts (PassMark / Newegg only record today's price each crawl run).
@@ -1621,6 +1685,96 @@ CURATED_RETAIL_PRICES = [
     ("DDR4-3200-16GB","2022-10-01","curated", 51,None,None,None),
     ("DDR4-3200-16GB","2022-11-01","curated", 50,None,None,None),
     ("DDR4-3200-16GB","2022-12-01","curated", 50,None,None,None),
+]
+
+# ── Curated Demand Indicators (BACKLOG SC-06 / SC-00 fix B) ──────────────────
+# Four free, authoritative semiconductor demand series — a deliberate shift
+# away from the consumer-retail proxies (Newegg/PassMark/Steam) that dominate
+# the rest of this module. Every row below is genuinely published — transcribed
+# directly from the cited primary source (org name in the `source` column), not
+# modeled, and NOT the SRC_PUBLISHED constant (that string is hardcoded to
+# "TrendForce (public release)" for SC-05's DRAM series specifically). tsmc_revenue and
+# umc_revenue also have a LIVE crawler (crawl_tsmc_revenue / crawl_umc_revenue
+# in supply_chain_crawler.py) — both IR pages are plain server-rendered HTML
+# tables, confirmed by fetching them directly. korea_chip_exports_20d,
+# wsts_billings, and semi_wwsems_billings are curated-only: their sources
+# publish as one-off press articles or behind a members-only portal (WSTS),
+# not a stable per-period table, so a scraper would repeat the SC-02/SEMI-BTB
+# mistake of parsing a page shape that isn't actually there. Update by hand
+# each time the source releases new data; see DEMAND_INDICATOR_META for cadence.
+#
+# Format: (indicator_key, metric_label, period, period_type, value, unit,
+#          yoy_pct, seq_pct, source, notes)
+#   period_type: "month" (YYYY-MM) | "quarter" (YYYY-Qn)
+#   seq_pct:     MoM for month rows, QoQ for quarter rows; None if not available
+DEMAND_INDICATOR_META = {
+    "tsmc_revenue": {
+        "label": "TSMC Monthly Revenue", "unit": "NT$B", "period_type": "month",
+        "org": "TSMC IR", "cadence": "Monthly, ~10th of the month",
+        "url": "https://investor.tsmc.com/english/monthly-revenue",
+    },
+    "umc_revenue": {
+        "label": "UMC Monthly Revenue", "unit": "NT$B", "period_type": "month",
+        "org": "UMC IR", "cadence": "Monthly, by the 10th",
+        "url": "https://www.umc.com/en/IR_Financial/monthly_sales_revenue",
+    },
+    "korea_chip_exports_20d": {
+        "label": "Korea Semiconductor Exports (1st 20 days)", "unit": "USD B",
+        "period_type": "month", "org": "Korea MOTIE / KITA",
+        "cadence": "~3x/month (10-day, 20-day, full-month customs releases)",
+        "url": None,
+    },
+    "wsts_billings": {
+        "label": "WSTS Global Semiconductor Sales", "unit": "USD B",
+        "period_type": "month", "org": "WSTS / SIA",
+        "cadence": "Monthly (3-month moving average)",
+        "url": "https://www.semiconductors.org/policies/tax/market-data/",
+    },
+    "semi_wwsems_billings": {
+        "label": "SEMI WWSEMS Equipment Billings", "unit": "USD B",
+        "period_type": "quarter", "org": "SEMI",
+        "cadence": "Quarterly",
+        "url": "https://www.semi.org/en/products-services/market-data/equipment-article-archive",
+    },
+}
+
+CURATED_DEMAND_INDICATORS = [
+    # ── TSMC monthly revenue [Source: TSMC IR monthly-revenue page] ──────────
+    # NT$ millions -> NT$B (÷1000). MoM computed from consecutive published
+    # months; YoY is TSMC's own published figure. Source is the actual org
+    # (TSMC IR), NOT the SRC_PUBLISHED constant — that string is hardcoded to
+    # "TrendForce (public release)" for the DRAM series (SC-05) and would
+    # misattribute this data if reused here.
+    ("tsmc_revenue", "TSMC Monthly Revenue", "2026-01", "month", 401.255, "NT$B", 36.8, None, "TSMC IR", "investor.tsmc.com/english/monthly-revenue"),
+    ("tsmc_revenue", "TSMC Monthly Revenue", "2026-02", "month", 317.657, "NT$B", 22.2, -20.83, "TSMC IR", "investor.tsmc.com/english/monthly-revenue"),
+    ("tsmc_revenue", "TSMC Monthly Revenue", "2026-03", "month", 415.191, "NT$B", 45.2, 30.70, "TSMC IR", "investor.tsmc.com/english/monthly-revenue"),
+    ("tsmc_revenue", "TSMC Monthly Revenue", "2026-04", "month", 410.726, "NT$B", 17.5, -1.08, "TSMC IR", "investor.tsmc.com/english/monthly-revenue"),
+    ("tsmc_revenue", "TSMC Monthly Revenue", "2026-05", "month", 416.975, "NT$B", 30.1, 1.52, "TSMC IR", "investor.tsmc.com/english/monthly-revenue"),
+    ("tsmc_revenue", "TSMC Monthly Revenue", "2026-06", "month", 442.680, "NT$B", 67.9, 6.17, "TSMC IR", "released 2026-07-13"),
+
+    # ── UMC monthly revenue [Source: UMC IR monthly-sales-revenue page] ──────
+    # NT$ thousands -> NT$B (÷1,000,000). YoY is UMC's own published figure.
+    ("umc_revenue", "UMC Monthly Revenue", "2026-01", "month", 20.862, "NT$B", 5.33, None, "UMC IR", "umc.com/en/IR_Financial/monthly_sales_revenue"),
+    ("umc_revenue", "UMC Monthly Revenue", "2026-02", "month", 19.345, "NT$B", 6.33, -7.27, "UMC IR", "umc.com/en/IR_Financial/monthly_sales_revenue"),
+    ("umc_revenue", "UMC Monthly Revenue", "2026-03", "month", 20.831, "NT$B", 4.89, 7.68, "UMC IR", "umc.com/en/IR_Financial/monthly_sales_revenue"),
+    ("umc_revenue", "UMC Monthly Revenue", "2026-04", "month", 22.664, "NT$B", 10.80, 8.80, "UMC IR", "umc.com/en/IR_Financial/monthly_sales_revenue"),
+    ("umc_revenue", "UMC Monthly Revenue", "2026-05", "month", 22.944, "NT$B", 17.78, 1.24, "UMC IR", "umc.com/en/IR_Financial/monthly_sales_revenue"),
+    ("umc_revenue", "UMC Monthly Revenue", "2026-06", "month", 23.125, "NT$B", 22.85, 0.79, "UMC IR", "released 2026-07-06"),
+
+    # ── Korea MOTIE/KITA — 1st-20-days semiconductor export value ────────────
+    ("korea_chip_exports_20d", "Korea Semiconductor Exports (1st 20 days)", "2026-07", "month",
+     22.1, "USD B", 180.0, None, "Korea MOTIE / KITA", "Customs release, Jul 1-20 2026"),
+
+    # ── WSTS / SIA — monthly global semiconductor sales (3MMA) ───────────────
+    ("wsts_billings", "WSTS Global Semiconductor Sales", "2026-03", "month", 99.5, "USD B", 79.2, 11.5, "WSTS / SIA", "monthly press release"),
+    ("wsts_billings", "WSTS Global Semiconductor Sales", "2026-04", "month", 110.5, "USD B", None, None, "WSTS / SIA", "monthly press release"),
+    ("wsts_billings", "WSTS Global Semiconductor Sales", "2026-05", "month", 120.6, "USD B", None, None, "WSTS / SIA", "monthly press release"),
+
+    # ── SEMI WWSEMS — quarterly worldwide equipment billings ─────────────────
+    # Replaces the retired sc_semi_btb series (BACKLOG SC-00).
+    ("semi_wwsems_billings", "SEMI WWSEMS Equipment Billings", "2025-Q2", "quarter", 33.07, "USD B", 24.0, None, "SEMI WWSEMS", "quarterly press release"),
+    ("semi_wwsems_billings", "SEMI WWSEMS Equipment Billings", "2025-Q3", "quarter", 33.66, "USD B", 11.0, None, "SEMI WWSEMS", "quarterly press release"),
+    ("semi_wwsems_billings", "SEMI WWSEMS Equipment Billings", "2026-Q1", "quarter", 36.55, "USD B", 14.0, 1.0, "SEMI WWSEMS", "quarterly press release"),
 ]
 
 # ── Convenience: all products merged ─────────────────────────────────────────

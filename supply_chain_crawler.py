@@ -34,6 +34,7 @@ from products_config import (
     CPU_ENTERPRISE_PRODUCTS,
     CPU_PRODUCTS,
     CURATED_CAPACITY,
+    CURATED_DEMAND_INDICATORS,
     CURATED_DRAM_SPOT,
     CURATED_RETAIL_PRICES,
     CURATED_SEMI_BTB,
@@ -42,6 +43,7 @@ from products_config import (
     GPU_PRODUCTS,
     NEWEGG_PRODUCTS,
     RAM_PRODUCTS,
+    SRC_PUBLISHED,
 )
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -139,6 +141,28 @@ def init_supply_chain_db(conn: sqlite3.Connection) -> None:
             notes           TEXT,
             PRIMARY KEY (company, product_type, period)
         );
+
+        -- Macro demand indicators (BACKLOG SC-06 / SC-00 fix B).
+        -- Unified table for four free, authoritative series with different
+        -- cadences/units rather than one bespoke table per source:
+        --   tsmc_revenue / umc_revenue            monthly, NT$B  (live crawl)
+        --   korea_chip_exports_20d                ~3x/month, USD B (curated)
+        --   wsts_billings                         monthly, USD B (curated)
+        --   semi_wwsems_billings                  quarterly, USD B (curated;
+        --                                          replaces sc_semi_btb)
+        CREATE TABLE IF NOT EXISTS sc_demand_indicators (
+            indicator_key   TEXT    NOT NULL,   -- tsmc_revenue | umc_revenue | ...
+            metric_label    TEXT    NOT NULL,
+            period          TEXT    NOT NULL,   -- YYYY-MM or YYYY-Qn
+            period_type     TEXT    NOT NULL,   -- month | quarter
+            value           REAL,
+            unit            TEXT,
+            yoy_pct         REAL,
+            seq_pct         REAL,               -- MoM (month) or QoQ (quarter)
+            source          TEXT,
+            notes           TEXT,
+            PRIMARY KEY (indicator_key, period)
+        );
     """)
     conn.commit()
     log.info("Supply-chain DB tables ready.")
@@ -211,13 +235,50 @@ def load_curated_retail_prices(conn: sqlite3.Connection) -> None:
     log.info("Curated retail prices loaded — %d rows.", len(CURATED_RETAIL_PRICES))
 
 
+def purge_null_price_rows(conn: sqlite3.Connection) -> None:
+    """
+    Delete contentless rows from sc_prices (BACKLOG SC-01).
+
+    Before the write-guard in crawl_newegg(), a failed scrape still persisted a row
+    with price_usd IS NULL. Those rows inflate COUNT(*) so /api/db-stats reports a
+    dead scraper as healthy. Deleting them is safe: PK is (model_id, date, source)
+    and every affected row carries no data.
+
+    Idempotent — runs on every deploy via --curated-only; a no-op once clean.
+    """
+    n = conn.execute(
+        "DELETE FROM sc_prices WHERE price_usd IS NULL AND passmark_score IS NULL"
+    ).rowcount
+    conn.commit()
+    if n:
+        log.warning("Purged %d contentless sc_prices rows (NULL price + NULL score).", n)
+
+
 def load_curated_semi_btb(conn: sqlite3.Connection) -> None:
     conn.executemany(
         "INSERT OR REPLACE INTO sc_semi_btb VALUES (?,?,?)",
         CURATED_SEMI_BTB,
     )
     conn.commit()
-    log.info("SEMI B2B data loaded — %d rows.", len(CURATED_SEMI_BTB))
+    log.info("B2B data loaded — %d rows (MODELLED ESTIMATES, not a SEMI publication; "
+             "see BACKLOG SC-00).", len(CURATED_SEMI_BTB))
+
+
+def load_curated_demand_indicators(conn: sqlite3.Connection) -> None:
+    """Seed sc_demand_indicators (BACKLOG SC-06 / SC-00 fix B).
+
+    All rows are SRC_PUBLISHED — transcribed from TSMC/UMC IR, Korea MOTIE,
+    WSTS/SIA, and SEMI WWSEMS releases, not modeled. tsmc_revenue and
+    umc_revenue get supplemented by a live crawl (crawl_tsmc_revenue /
+    crawl_umc_revenue below); the other three are curated-only pending a
+    stable source page — see the note in products_config.py.
+    """
+    conn.executemany(
+        "INSERT OR REPLACE INTO sc_demand_indicators VALUES (?,?,?,?,?,?,?,?,?,?)",
+        CURATED_DEMAND_INDICATORS,
+    )
+    conn.commit()
+    log.info("Demand indicators loaded — %d rows.", len(CURATED_DEMAND_INDICATORS))
 
 
 def load_curated_steam_survey(conn: sqlite3.Connection) -> None:
@@ -424,7 +485,8 @@ def _newegg_search_price(query: str) -> tuple:
 def crawl_newegg(conn: sqlite3.Connection) -> None:
     """Crawl Newegg retail prices and in-stock status for all catalogued products."""
     log.info("Newegg — crawling %d products …", len(NEWEGG_PRODUCTS))
-    rows = []
+    rows    = []
+    misses  = 0
     for i, (model_id, prod) in enumerate(NEWEGG_PRODUCTS.items(), 1):
         query = prod["newegg_q"]
         price, in_stock = _newegg_search_price(query)
@@ -432,140 +494,361 @@ def crawl_newegg(conn: sqlite3.Connection) -> None:
         stk    = {1: "In Stock", 0: "OOS", None: "?"}[in_stock]
         log.info("  [%d/%d] %-22s  price=%-10s  stock=%s",
                  i, len(NEWEGG_PRODUCTS), model_id, status, stk)
-        rows.append((model_id, TODAY, "newegg", price, None, None, in_stock))
+
+        # A parse failure must NOT be persisted. Writing a NULL-price row keeps
+        # COUNT(*) climbing while the table holds nothing — /api/db-stats then
+        # reports the scraper as healthy. A missing row is honest; a NULL row
+        # is a lie. (BACKLOG SC-01)
+        if price is None:
+            misses += 1
+            log.warning("  Newegg — no price parsed for %s; row skipped", model_id)
+        else:
+            rows.append((model_id, TODAY, "newegg", price, None, None, in_stock))
+
         time.sleep(REQUEST_DELAY_SECONDS * 3)   # respect Newegg rate limits
 
-    conn.executemany(
-        "INSERT OR REPLACE INTO sc_prices VALUES (?,?,?,?,?,?,?)",
-        rows,
-    )
-    conn.commit()
-    log.info("Newegg — %d products stored.", len(rows))
+    if rows:
+        conn.executemany(
+            "INSERT OR REPLACE INTO sc_prices VALUES (?,?,?,?,?,?,?)",
+            rows,
+        )
+        conn.commit()
+
+    total    = len(NEWEGG_PRODUCTS)
+    miss_pct = (misses / total * 100) if total else 0.0
+    log.info("Newegg — %d/%d products stored (%d skipped, %.0f%% miss rate).",
+             len(rows), total, misses, miss_pct)
+    if total and miss_pct >= 50:
+        log.error(
+            "NEWEGG SCRAPER LIKELY BROKEN — %.0f%% of %d products returned no price. "
+            "Newegg serves JS-rendered listings behind bot detection; both the JSON-LD "
+            "and .price-current parse paths in _newegg_search_price() may need replacing. "
+            "See BACKLOG SC-01 / SC-06.",
+            miss_pct, total,
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LIVE SOURCE 3 — Steam Hardware Survey (GPU Sales Volume Proxy)
 # ══════════════════════════════════════════════════════════════════════════════
 
+_STEAM_URL = "https://store.steampowered.com/hwsurvey/videocard/"
+
+# The survey page repeats every GPU in several tables: one overall table
+# ("ALL VIDEO CARDS") and then one per DirectX class.  In the per-class tables
+# the percentages are shares *within that class* — Intel HD Graphics 4000 shows
+# ~28% under "DIRECTX 11 GPUS".  Scraping without respecting this boundary puts
+# a decade-old iGPU at the top of the market-share chart.  (BACKLOG SC-02)
+_STEAM_SECTION_START = "ALL VIDEO CARDS"
+_STEAM_SECTION_END   = "DIRECTX 12 GPUS"
+
+_STEAM_MONTHS = {m: i for i, m in enumerate(
+    ["january", "february", "march", "april", "may", "june",
+     "july", "august", "september", "october", "november", "december"], start=1)}
+
+_PCT_RE   = re.compile(r"^[+-]?\d+(?:\.\d+)?%$")
+_TITLE_RE = re.compile(r"Survey:\s*([A-Za-z]+)\s+(\d{4})")
+
+
+def _parse_steam_survey(text: str) -> tuple:
+    """
+    Parse the visible text of the Steam HW Survey video-card page.
+
+    Returns (period, [(model_name, share_pct), ...]).  `period` is the survey's
+    OWN month ("YYYY-MM") taken from the page heading — never today's date, so a
+    stale page can never be stamped as current (CLAUDE.md §7.3).
+
+    Row shape on the page is:  NAME, <5 monthly values>, <MoM change>.
+    The current month is therefore the SECOND-TO-LAST value in the run, not the
+    last — the last column is the delta.
+    """
+    period = None
+    m = _TITLE_RE.search(text)
+    if m:
+        mon = _STEAM_MONTHS.get(m.group(1).strip().lower())
+        if mon:
+            period = f"{int(m.group(2)):04d}-{mon:02d}"
+
+    lines = [ln.strip().strip("*").strip() for ln in text.splitlines()]
+    lines = [ln for ln in lines if ln]
+
+    # Restrict to the overall table.
+    try:
+        i0 = next(i for i, ln in enumerate(lines) if _STEAM_SECTION_START in ln.upper())
+    except StopIteration:
+        return period, []
+    i1 = next((i for i, ln in enumerate(lines[i0 + 1:], i0 + 1)
+               if _STEAM_SECTION_END in ln.upper()), len(lines))
+    lines = lines[i0 + 1:i1]
+
+    out, name, run = [], None, []
+
+    def _flush():
+        # run = [JAN, FEB, MAR, APR, CURRENT, CHANGE]; take CURRENT.
+        if name and len(run) >= 2:
+            raw = run[-2].rstrip("%")
+            try:
+                pct = float(raw)
+            except ValueError:
+                return
+            if 0 < pct <= 100 and name.upper() not in ("OTHER",):
+                out.append((name, pct))
+
+    for ln in lines:
+        if _PCT_RE.match(ln) or ln == "-":
+            run.append(ln)
+        else:
+            _flush()
+            name, run = (ln if not ln.isupper() else None), []
+    _flush()
+    return period, out
+
+
 def crawl_steam_survey(conn: sqlite3.Connection) -> None:
     """
-    Fetch the Steam Hardware Survey GPU page.
-    Extracts GPU model → % share (proxy for relative sales volume / installed base).
+    Fetch the Steam Hardware Survey GPU page and store model → % share.
+
+    Validates before writing: a partial or mis-shaped parse must never overwrite
+    the curated seed with garbage, and must never be silently accepted (the old
+    version searched for a `"hardware":"…"` JSON blob the page does not contain,
+    found nothing, and wrote zero rows without raising — the table then sat
+    frozen for 17 months).  See BACKLOG SC-02.
     """
-    url = "https://store.steampowered.com/hwsurvey/videocard/"
     log.info("Steam HW Survey — fetching GPU market share …")
+    try:
+        resp = SESSION.get(_STEAM_URL, timeout=25)
+        resp.raise_for_status()
+        text = BeautifulSoup(resp.text, "html.parser").get_text("\n")
+    except Exception as exc:
+        log.error("STEAM SURVEY FETCH FAILED: %s — curated seed retained.", exc)
+        return
+
+    period, entries = _parse_steam_survey(text)
+
+    # ── Validation gates ──────────────────────────────────────────────────────
+    problems = []
+    if not period:
+        problems.append("survey month not found in page heading")
+    if len(entries) < 15:
+        problems.append(f"only {len(entries)} GPU entries parsed (expected 15+)")
+    total = sum(p for _, p in entries)
+    if entries and not (40 <= total <= 105):
+        problems.append(f"shares sum to {total:.1f}% (expected 40–105%)")
+
+    if problems:
+        log.error(
+            "STEAM SURVEY PARSE REJECTED (%s) — page layout has likely changed. "
+            "Curated seed retained; refresh CURATED_STEAM_SURVEY by hand and see "
+            "BACKLOG SC-02.", "; ".join(problems),
+        )
+        return
+
+    conn.executemany(
+        "INSERT OR REPLACE INTO sc_market_share VALUES (?,?,?,?)",
+        [(n, period, p, "Steam HW Survey") for n, p in entries],
+    )
+    conn.commit()
+    log.info("Steam HW Survey — %d GPU entries stored for %s (shares sum %.1f%%).",
+             len(entries), period, total)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LIVE SOURCE 4 — TSMC / UMC monthly revenue (BACKLOG SC-06)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Both IR pages were fetched and confirmed server-rendered plain HTML tables —
+# not JS-only shells like Steam (SC-02) or a discontinued article search like
+# SEMI B2B (SC-00). That confirmation is why these two get a live crawler while
+# korea_chip_exports_20d / wsts_billings / semi_wwsems_billings do not: those
+# three publish as one-off press articles or a members-only portal, with no
+# stable per-period table to point a parser at.
+
+_TSMC_MONTH_RE = re.compile(
+    r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec)\.?\s*\n+"
+    r"\s*([\d,]{5,10})\s*\n+\s*([\-\d.]+)\s*%",
+)
+_TSMC_MONTH_NUM = {"Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+                    "Jul": 7, "Aug": 8, "Sept": 9, "Sep": 9, "Oct": 10,
+                    "Nov": 11, "Dec": 12}
+
+
+def _parse_tsmc_revenue(text: str, year: int) -> list:
+    """
+    Parse TSMC's monthly-revenue IR page (get_text("\n") linearization).
+
+    Row shape per month is "Jan.\n401,255\n36.8%" (month, NT$ millions, YoY%);
+    future months in the same-year table render as blank cells and simply
+    don't match. Returns [(period, value_ntb, yoy_pct), ...] sorted by month,
+    MoM ("seq_pct") computed here from consecutive rows since the page only
+    publishes YoY.
+    """
+    rows = []
+    for mon_abbr, raw_millions, yoy in _TSMC_MONTH_RE.findall(text):
+        mon = _TSMC_MONTH_NUM.get(mon_abbr)
+        if mon is None:
+            continue
+        try:
+            value_ntb = float(raw_millions.replace(",", "")) / 1000.0
+            yoy_pct = float(yoy)
+        except ValueError:
+            continue
+        rows.append((mon, f"{year:04d}-{mon:02d}", value_ntb, yoy_pct))
+    rows.sort(key=lambda r: r[0])
+    out = []
+    prev_value = None
+    for _, period, value_ntb, yoy_pct in rows:
+        seq_pct = ((value_ntb / prev_value - 1) * 100) if prev_value else None
+        out.append((period, value_ntb, yoy_pct, seq_pct))
+        prev_value = value_ntb
+    return out
+
+
+def crawl_tsmc_revenue(conn: sqlite3.Connection) -> None:
+    """
+    Fetch TSMC's IR monthly-revenue page for the current year and store it.
+
+    Validates before writing (BACKLOG SC-01/SC-02 lesson): requires at least
+    one parsed month with a revenue figure in TSMC's normal order of magnitude
+    (NT$100B–NT$1000B) — a parse that finds nothing, or finds implausible
+    numbers, must never overwrite the curated seed and must never fail
+    silently.
+    """
+    year = int(_now_hkt().strftime("%Y"))
+    url = f"https://investor.tsmc.com/english/monthly-revenue/{year}"
+    log.info("TSMC monthly revenue — fetching %s …", url)
     try:
         resp = SESSION.get(url, timeout=25)
         resp.raise_for_status()
-        html = resp.text
-
-        # Data is embedded in JS: each entry has "hardware":"..." and "percentage":"..."
-        # Use re.DOTALL so the pattern spans newlines inside JS objects.
-        matches = re.findall(
-            r'"hardware"\s*:\s*"([^"]+)"[\s\S]*?"percentage"\s*:\s*"([\d.]+)"',
-            html, re.DOTALL,
-        )
-        if not matches:
-            # Fallback: parse HTML rows
-            soup  = BeautifulSoup(html, "html.parser")
-            rows_html = soup.select("table tr, .survey_area tr")
-            matches = []
-            for row in rows_html:
-                cells = row.find_all("td")
-                if len(cells) >= 2:
-                    name = cells[0].get_text(strip=True)
-                    pct  = cells[-1].get_text(strip=True).replace("%", "").strip()
-                    if name and pct:
-                        matches.append((name, pct))
-
-        rows = []
-        for name, pct_str in matches:
-            try:
-                pct = float(str(pct_str).replace("%", "").strip())
-                rows.append((name, THIS_MONTH, pct, "Steam HW Survey"))
-            except ValueError:
-                continue
-
-        conn.executemany(
-            "INSERT OR REPLACE INTO sc_market_share VALUES (?,?,?,?)",
-            rows,
-        )
-        conn.commit()
-        log.info("Steam HW Survey — %d GPU entries stored for %s.", len(rows), THIS_MONTH)
-
+        text = BeautifulSoup(resp.text, "html.parser").get_text("\n")
     except Exception as exc:
-        log.warning("Steam HW Survey failed: %s", exc)
+        log.error("TSMC REVENUE FETCH FAILED: %s — curated seed retained.", exc)
+        return
+
+    parsed = _parse_tsmc_revenue(text, year)
+    bad = [p for p in parsed if not (100 <= p[1] <= 1000)]
+    if not parsed or bad:
+        log.error(
+            "TSMC REVENUE PARSE REJECTED (%s) — page layout has likely changed. "
+            "Curated seed retained; refresh CURATED_DEMAND_INDICATORS by hand "
+            "and see BACKLOG SC-06.",
+            "no rows parsed" if not parsed else f"{len(bad)} implausible value(s)",
+        )
+        return
+
+    conn.executemany(
+        "INSERT OR REPLACE INTO sc_demand_indicators VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [("tsmc_revenue", "TSMC Monthly Revenue", period, "month", value, "NT$B",
+          yoy, seq, SRC_PUBLISHED, "TSMC IR (live crawl)")
+         for period, value, yoy, seq in parsed],
+    )
+    conn.commit()
+    log.info("TSMC monthly revenue — %d month(s) stored, latest %s = NT$%.1fB.",
+              len(parsed), parsed[-1][0], parsed[-1][1])
+
+
+_UMC_ROW_RE = re.compile(
+    r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s*\n+"
+    r"\s*([\d,]{5,12})\s*\n+\s*[\d,]{5,12}\s*\n+\s*[\-\d,]+\s*\n+\s*([\-\d.]+)\s*%",
+)
+
+
+def _parse_umc_revenue(text: str, year: int) -> list:
+    """
+    Parse UMC's monthly-sales-revenue IR page.
+
+    Row shape per month is "Jan.\n<NT$'000 2026>\n<NT$'000 2025>\n<YoY change>\n
+    <YoY %>" — five cells; UMC publishes YoY% itself so no MoM computation is
+    needed for accuracy, but seq_pct (MoM) is still derived for consistency
+    with tsmc_revenue.
+    """
+    rows = []
+    for mon_abbr, raw_thousands, yoy in _UMC_ROW_RE.findall(text):
+        mon = _TSMC_MONTH_NUM.get(mon_abbr)
+        if mon is None:
+            continue
+        try:
+            value_ntb = float(raw_thousands.replace(",", "")) / 1_000_000.0
+            yoy_pct = float(yoy)
+        except ValueError:
+            continue
+        rows.append((mon, f"{year:04d}-{mon:02d}", value_ntb, yoy_pct))
+    rows.sort(key=lambda r: r[0])
+    out = []
+    prev_value = None
+    for _, period, value_ntb, yoy_pct in rows:
+        seq_pct = ((value_ntb / prev_value - 1) * 100) if prev_value else None
+        out.append((period, value_ntb, yoy_pct, seq_pct))
+        prev_value = value_ntb
+    return out
+
+
+def crawl_umc_revenue(conn: sqlite3.Connection) -> None:
+    """
+    Fetch UMC's IR monthly-sales-revenue page for the current year and store it.
+
+    Same validation discipline as crawl_tsmc_revenue: UMC's monthly revenue
+    runs roughly NT$15B–NT$30B; anything outside that band rejects the whole
+    batch rather than writing a bad number.
+    """
+    year = int(_now_hkt().strftime("%Y"))
+    url = "https://www.umc.com/en/IR_Financial/monthly_sales_revenue"
+    log.info("UMC monthly revenue — fetching %s …", url)
+    try:
+        resp = SESSION.get(url, timeout=25)
+        resp.raise_for_status()
+        text = BeautifulSoup(resp.text, "html.parser").get_text("\n")
+    except Exception as exc:
+        log.error("UMC REVENUE FETCH FAILED: %s — curated seed retained.", exc)
+        return
+
+    parsed = _parse_umc_revenue(text, year)
+    bad = [p for p in parsed if not (10 <= p[1] <= 50)]
+    if not parsed or bad:
+        log.error(
+            "UMC REVENUE PARSE REJECTED (%s) — page layout has likely changed. "
+            "Curated seed retained; refresh CURATED_DEMAND_INDICATORS by hand "
+            "and see BACKLOG SC-06.",
+            "no rows parsed" if not parsed else f"{len(bad)} implausible value(s)",
+        )
+        return
+
+    conn.executemany(
+        "INSERT OR REPLACE INTO sc_demand_indicators VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [("umc_revenue", "UMC Monthly Revenue", period, "month", value, "NT$B",
+          yoy, seq, SRC_PUBLISHED, "UMC IR (live crawl)")
+         for period, value, yoy, seq in parsed],
+    )
+    conn.commit()
+    log.info("UMC monthly revenue — %d month(s) stored, latest %s = NT$%.1fB.",
+              len(parsed), parsed[-1][0], parsed[-1][1])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LIVE SOURCE 4 — SEMI Book-to-Bill (Order Volume Indicator)
+# LIVE SOURCE 5 — RETIRED: SEMI NA Book-to-Bill (see BACKLOG SC-00)
 # ══════════════════════════════════════════════════════════════════════════════
+#
+# SEMI discontinued the North American Semiconductor Equipment Book-to-Bill
+# report after the DECEMBER 2016 report; the NA billings press release also
+# ceased in Feb-2022.  The former scraper here searched semi.org for a monthly
+# "book to bill" press release that has not existed for ~9 years, failed
+# silently every run, and left the hand-modelled CURATED_SEMI_BTB rows in place
+# looking like live data.
+#
+# The live capex/order signal that DOES exist is the SEMI/SEAJ Worldwide
+# Semiconductor Equipment Market Statistics (WWSEMS) QUARTERLY billings report
+# (e.g. Q1 2026: $36.55B, +14% YoY).  Wiring that up is BACKLOG SC-00 fix B and
+# needs a new `sc_equipment_billings` table — a schema change, which requires
+# sign-off per CLAUDE.md §1 step 7.  Until then this is a no-op stub: better an
+# empty series than an invented one.
+
 
 def crawl_semi_btb(conn: sqlite3.Connection) -> None:
-    """
-    Attempt to fetch the latest SEMI NA Equipment Book-to-Bill ratio.
-    SEMI publishes monthly press releases at semi.org.
-    Falls back gracefully if the page structure changes.
-    """
-    url  = "https://www.semi.org/en/news-media-press-releases?combine=book+to+bill&field_article_type_tid=All"
-    log.info("SEMI B2B — fetching latest press release …")
-    try:
-        resp = SESSION.get(url, timeout=20)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        # Find the first result link that looks like a B2B report
-        links = soup.select("a[href*='book'], a[href*='billing'], h3 a, .views-field-title a")
-        for link in links[:5]:
-            href = link.get("href", "")
-            text = link.get_text(strip=True).lower()
-            if "book" in text or "billing" in text or "b2b" in text:
-                article_url = href if href.startswith("http") else "https://www.semi.org" + href
-                _parse_semi_btb_article(conn, article_url)
-                return
-
-        log.info("SEMI B2B — no new article found; curated data already loaded.")
-    except Exception as exc:
-        log.warning("SEMI B2B fetch failed: %s", exc)
-
-
-def _parse_semi_btb_article(conn: sqlite3.Connection, url: str) -> None:
-    """Extract the B2B ratio from a SEMI press release article."""
-    try:
-        resp = SESSION.get(url, timeout=20)
-        resp.raise_for_status()
-        text = BeautifulSoup(resp.text, "html.parser").get_text(" ")
-
-        # Look for patterns like "ratio was 1.23" or "book-to-bill of 1.23"
-        m = re.search(r"(?:ratio|book-to-bill)[^\d]{0,30}(\d+\.\d+)", text, re.IGNORECASE)
-        if not m:
-            m = re.search(r"(\d\.\d{2})\s*(?:ratio|book|billing)", text, re.IGNORECASE)
-        if not m:
-            log.info("SEMI B2B — could not extract ratio from article.")
-            return
-
-        ratio = float(m.group(1))
-        # Determine month from article text
-        month_m = re.search(
-            r"(January|February|March|April|May|June|July|August|September|October|November|December)"
-            r"\s+(\d{4})", text, re.IGNORECASE,
-        )
-        if month_m:
-            from datetime import datetime as _dt
-            dt = _dt.strptime(f"{month_m.group(1)} {month_m.group(2)}", "%B %Y")
-            period = dt.strftime("%Y-%m")
-        else:
-            period = THIS_MONTH
-
-        conn.execute(
-            "INSERT OR REPLACE INTO sc_semi_btb VALUES (?,?,?)",
-            (period, ratio, "SEMI NA Equipment B2B (live)"),
-        )
-        conn.commit()
-        log.info("SEMI B2B — period=%s  ratio=%.2f  stored.", period, ratio)
-
-    except Exception as exc:
-        log.warning("SEMI B2B article parse failed (%s): %s", url, exc)
+    """No-op. The source report was discontinued in 2016 — see the note above."""
+    log.info(
+        "SEMI B2B — crawler retired: the NA Book-to-Bill report was discontinued "
+        "after Dec-2016. Existing sc_semi_btb rows are MODELLED ESTIMATES, not SEMI "
+        "data. Replacement = SEMI WWSEMS quarterly billings (BACKLOG SC-00)."
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -591,6 +874,8 @@ def crawl_supply_chain(quick: bool = False, curated_only: bool = False) -> None:
     load_curated_semi_btb(conn)
     load_curated_retail_prices(conn)
     load_curated_steam_survey(conn)   # seed Steam data; live crawl may overwrite
+    load_curated_demand_indicators(conn)  # seed demand data; TSMC/UMC live crawl may overwrite
+    purge_null_price_rows(conn)       # BACKLOG SC-01 — idempotent cleanup
 
     if curated_only:
         conn.close()
@@ -609,6 +894,10 @@ def crawl_supply_chain(quick: bool = False, curated_only: bool = False) -> None:
     crawl_steam_survey(conn)
     time.sleep(REQUEST_DELAY_SECONDS)
     crawl_semi_btb(conn)
+    time.sleep(REQUEST_DELAY_SECONDS)
+    crawl_tsmc_revenue(conn)
+    time.sleep(REQUEST_DELAY_SECONDS)
+    crawl_umc_revenue(conn)
 
     conn.close()
     log.info("✅  Supply chain crawl complete.")

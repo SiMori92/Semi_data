@@ -28,6 +28,8 @@ from products_config import (
     CPU_PRODUCTS, CPU_ENTERPRISE_PRODUCTS,
     RAM_PRODUCTS,
     ENTERPRISE_PRODUCT_LAUNCHES,
+    SRC_PUBLISHED, SRC_MODELED, CURATED_RETAIL_PROVENANCE,
+    DEMAND_INDICATOR_META,
 )
 
 # IBKR integration (optional — graceful if not installed / not enabled)
@@ -115,6 +117,152 @@ def query(sql: str, params=()) -> pd.DataFrame:
             return pd.read_sql_query(sql, c, params=params)
     except Exception:
         return pd.DataFrame()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DATA FRESHNESS (BACKLOG SC-03)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Row counts are not a health signal. Three separate data outages — the Newegg
+# NULL-price rows, the 17-month-frozen Steam survey, and the retired SEMI B2B
+# series — all ran with COUNT(*) climbing or steady and every status endpoint
+# green. A source that has stopped producing must be distinguishable from one
+# that is working, so every table declares the column that carries its
+# observation date and an SLA for how old that date may get.
+#
+#   table -> (date column, granularity, SLA in days)
+#
+# Granularity matters: 'month' and 'quarter' periods are measured from the END
+# of the period, otherwise a figure published for May would count as 30 days
+# stale on 1 June through no fault of the source.
+
+_FRESHNESS_SPEC = {
+    "daily_prices":         ("date",          "date",      4),
+    "market_sentiment":     ("snapshot_date", "date",      4),
+    "cycle_analysis":       ("snapshot_date", "date",      4),
+    "quarterly_financials": ("period_end",    "date",    120),
+    "options_iv":           ("snapshot_date", "date",      4),
+    "sc_dram_spot":         ("period",        "month",    45),
+    "sc_semi_btb":          ("period",        "month",    45),
+    # 120d, not 60d: Valve publishes the survey with a 1–3 month lag, and this
+    # SLA must agree with the "As of" badge in _sc_steam_panel() (red at 4+
+    # months). Two surfaces disagreeing about the same table is how a real
+    # signal gets ignored.
+    "sc_market_share":      ("period",        "month",   120),
+    "sc_capacity":          ("period",        "quarter", 150),
+}
+
+# sc_prices mixes live scrapes and curated history in one table under different
+# `source` values, so it gets one entry per source class rather than one overall.
+_SC_PRICE_SLA = {"newegg": 7, "passmark": 7, "curated": 45}
+
+# sc_demand_indicators (BACKLOG SC-06) mixes five series at three different
+# cadences in one table — same per-key pattern as _SC_PRICE_SLA. tsmc/umc get
+# a tight SLA because they have a live crawler; the three curated-only series
+# get slack matching how often their source actually publishes.
+_SC_DEMAND_SLA = {
+    "tsmc_revenue":           40,   # monthly, published ~10th
+    "umc_revenue":            40,
+    "korea_chip_exports_20d": 20,   # ~3x/month
+    "wsts_billings":          45,
+    "semi_wwsems_billings":  110,   # quarterly
+}
+_SC_DEMAND_KIND = {
+    "semi_wwsems_billings": "quarter",
+}
+
+
+def _period_end_date(value: str, kind: str):
+    """Normalise a stored period to the calendar date it stops describing."""
+    if value is None:
+        return None
+    v = str(value).strip()
+    try:
+        if kind == "month":                      # "2026-05"
+            return (pd.Period(v[:7], freq="M")).end_time.normalize()
+        if kind == "quarter":                    # "2025-Q1"
+            return (pd.Period(v.replace("-", ""), freq="Q")).end_time.normalize()
+        return pd.to_datetime(v[:10]).normalize()
+    except Exception:
+        return None
+
+
+def _freshness_report() -> dict:
+    """
+    Per-source freshness: newest observation, age in days, SLA, breach flag.
+
+    Never raises — a missing table is reported, not fatal. Shared by
+    /api/db-stats and the navbar badge so both can never disagree.
+    """
+    today  = pd.Timestamp.today().normalize()
+    report = {}
+
+    def _entry(key, max_period, kind, sla, rows, extra=None):
+        end  = _period_end_date(max_period, kind)
+        days = int((today - end).days) if end is not None else None
+        rec  = {
+            "rows":       rows,
+            "max_period": str(max_period) if max_period is not None else None,
+            "days_stale": days,
+            "sla_days":   sla,
+            "stale":      (days is not None and days > sla),
+        }
+        if extra:
+            rec.update(extra)
+        # A source can be perfectly punctual and still carry nothing — the Newegg
+        # scraper wrote a fresh row per product per day, every one of them NULL.
+        # Timeliness and content are separate failures; flag both.
+        rec["empty"]     = bool(rec.get("null_price_pct", 0) >= 50)
+        rec["unhealthy"] = bool(rec["stale"] or rec["empty"])
+        report[key] = rec
+
+    for table, (col, kind, sla) in _FRESHNESS_SPEC.items():
+        df = query(f"SELECT COUNT(*) AS n, MAX({col}) AS mx FROM {table}")
+        if df.empty:
+            report[table] = {"rows": "table missing", "max_period": None,
+                             "days_stale": None, "sla_days": sla, "stale": False}
+            continue
+        _entry(table, df["mx"].iloc[0], kind, sla, int(df["n"].iloc[0]))
+
+    # sc_prices — per source, plus the null-price rate that hid the Newegg outage.
+    df = query(
+        "SELECT source, COUNT(*) AS n, COUNT(price_usd) AS priced, MAX(date) AS mx "
+        "FROM sc_prices GROUP BY source"
+    )
+    for _, r in df.iterrows():
+        src   = str(r["source"])
+        n     = int(r["n"])
+        prc   = int(r["priced"])
+        _entry(
+            f"sc_prices[{src}]", r["mx"], "date", _SC_PRICE_SLA.get(src, 45), n,
+            extra={"null_price_pct": round((n - prc) / n * 100, 1) if n else 0.0},
+        )
+
+    # sc_demand_indicators — per indicator_key (BACKLOG SC-06); table may not
+    # exist yet on an old DB, so this must degrade gracefully like the others.
+    df = query(
+        "SELECT indicator_key, COUNT(*) AS n, MAX(period) AS mx "
+        "FROM sc_demand_indicators GROUP BY indicator_key"
+    )
+    for _, r in df.iterrows():
+        key = str(r["indicator_key"])
+        kind = _SC_DEMAND_KIND.get(key, "month")
+        _entry(f"sc_demand[{key}]", r["mx"], kind, _SC_DEMAND_SLA.get(key, 45), int(r["n"]))
+
+    return report
+
+
+def _stale_sources(report: dict = None) -> list:
+    """
+    Sources breaching their SLA *or* returning mostly-empty rows, worst first.
+
+    "Stale" is the shorthand; `unhealthy` is the real test, because a dead
+    scraper that still writes a row every day is punctual and useless.
+    """
+    rep = report if report is not None else _freshness_report()
+    bad = [(k, v) for k, v in rep.items() if v.get("unhealthy")]
+    bad.sort(key=lambda kv: kv[1].get("days_stale") or 0, reverse=True)
+    return [k for k, _ in bad]
 
 
 def all_tickers() -> list[str]:
@@ -277,7 +425,42 @@ def _time_rangeselector(active_index: int = 0) -> dict:
         bordercolor="#30363d",
         borderwidth=1,
         font=dict(color=TEXT, size=11),
+        # Pinned above the plot area, left-aligned. Plotly's default places the
+        # buttons *inside* the top-left of the plot, where they sit on top of the
+        # series lines and any top-anchored legend. Always pair with
+        # _apply_rangeselector_layout() so the headroom actually exists.
+        x=0, xanchor="left", y=1.03, yanchor="bottom",
     )
+
+
+def _apply_rangeselector_layout(fig, legend_bottom: bool = True,
+                                extra_height: int = 70) -> None:
+    """Reserve headroom for the 1Y/3Y/5Y rangeselector buttons.
+
+    Call this on EVERY figure that sets `rangeselector=_time_rangeselector(...)`.
+    Without it the buttons overlay the chart title, the legend, or the plotted
+    lines themselves (see §7.2 in CLAUDE.md).
+
+    - grows the figure so the plot area is not squeezed by the added top margin
+    - opens a 95 px top margin: title on the first line, buttons on the second
+    - moves the legend below the x-axis (default) so it can never collide with
+      the buttons; pass legend_bottom=False to keep the right-hand legend.
+    """
+    _h = fig.layout.height or 400
+    _upd = dict(
+        height=_h + extra_height,
+        title=dict(y=0.975, yanchor="top", x=0.01, xanchor="left"),
+    )
+    if legend_bottom:
+        _upd["margin"] = dict(l=60, r=25, t=95, b=95)
+        _upd["legend"] = dict(
+            orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0,
+            font=dict(color=TEXT, size=10),
+            bgcolor="rgba(0,0,0,0)", bordercolor="#30363d",
+        )
+    else:
+        _upd["margin"] = dict(l=60, r=25, t=95, b=55)
+    fig.update_layout(**_upd)
 
 
 def _range_start(years: int = 1) -> str:
@@ -392,8 +575,10 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
                     "color": GREEN, "fontSize": "11px", "marginLeft": "12px",
                     "opacity": "0.8",
                 }),
+                # ── Data-freshness badge (BACKLOG SC-03) ───────────────────
+                html.Span(id="data-freshness-badge", style={"marginLeft": "20px"}),
                 # ── IBKR connection badge ──────────────────────────────────
-                html.Span(id="ibkr-status-badge", style={"marginLeft": "20px"}),
+                html.Span(id="ibkr-status-badge", style={"marginLeft": "10px"}),
                 dbc.Button("🔄 Reload Charts", id="btn-refresh", color="primary",
                            size="sm", style={"marginLeft": "16px", "fontSize": "12px"},
                            title="Re-read data from the database and redraw all charts"),
@@ -611,6 +796,59 @@ _crawl_running: dict = {"active": False}
 
 
 @app.callback(
+    Output("data-freshness-badge", "children"),
+    Input("status-interval", "n_intervals"),
+)
+def update_freshness_badge(_):
+    """
+    Navbar chip naming every source past its SLA (BACKLOG SC-03).
+
+    Deliberately mirrors the IBKR badge: navbar-level Output, driven by
+    status-interval, never nested inside tab-content (CLAUDE.md §7 rules 3 & 4).
+    The point is that a source going quiet has to cost someone a glance — three
+    outages ran for months because nothing on screen changed when data stopped.
+    """
+    try:
+        report = _freshness_report()
+        stale  = _stale_sources(report)
+    except Exception as exc:
+        return html.Span(
+            [html.Span("⚠️", style={"marginRight": "4px"}), "freshness: error"],
+            style={"fontSize": "11px", "color": YELLOW,
+                   "border": f"1px solid {YELLOW}", "borderRadius": "4px",
+                   "padding": "2px 8px"},
+            title=f"Freshness check failed: {exc}",
+        )
+
+    if not stale:
+        return html.Span(
+            [html.Span("🟢", style={"marginRight": "4px"}), "data: fresh"],
+            style={"fontSize": "11px", "color": GREEN,
+                   "border": f"1px solid {GREEN}", "borderRadius": "4px",
+                   "padding": "2px 8px"},
+            title="Every tracked source is within its freshness SLA.",
+        )
+
+    def _why(k):
+        r = report[k]
+        if r.get("empty"):
+            return (f"{k}: {r['null_price_pct']}% of rows have no price "
+                    f"— scraper writing empty rows")
+        return (f"{k}: {r['max_period']} — {r['days_stale']}d old "
+                f"(SLA {r['sla_days']}d)")
+
+    detail = "\n".join(_why(k) for k in stale)
+    return html.Span(
+        [html.Span("🔴", style={"marginRight": "4px"}),
+         f"{len(stale)} stale/empty source{'s' if len(stale) > 1 else ''}"],
+        style={"fontSize": "11px", "color": RED,
+               "border": f"1px solid {RED}", "borderRadius": "4px",
+               "padding": "2px 8px", "cursor": "help"},
+        title="Sources past their freshness SLA — see /api/db-stats:\n\n" + detail,
+    )
+
+
+@app.callback(
     Output("ibkr-status-badge", "children"),
     Input("status-interval", "n_intervals"),
 )
@@ -774,23 +1012,14 @@ def tab_overview(tickers, start, end):
     # Shared x-axis lives on xaxis (row 1); xaxis2 (row 2) inherits the range
     fig_price.update_xaxes(
         range=[_1y_ago, end],
-        rangeselector=dict(
-            buttons=[
-                dict(count=1, label="1Y", step="year", stepmode="backward"),
-                dict(count=3, label="3Y", step="year", stepmode="backward"),
-                dict(count=5, label="5Y", step="year", stepmode="backward"),
-            ],
-            activecolor=ACCENT,
-            bgcolor=BG2,
-            bordercolor="#30363d",
-            borderwidth=1,
-            font=dict(color=TEXT, size=12),
-            x=0, y=1.06, xanchor="left",
-        ),
+        rangeselector=_time_rangeselector(active_index=0),
         rangeslider=dict(visible=False),
         type="date",
         row=1, col=1,
     )
+    # Subplot titles already occupy the top strip — keep the legend on the right
+    # here and just open the top margin for the buttons.
+    _apply_rangeselector_layout(fig_price, legend_bottom=False, extra_height=40)
     fig_price.update_yaxes(title_text="Index (Base=100)", row=1, col=1,
                             gridcolor="#21262d", color=TEXT)
     fig_price.update_yaxes(title_text="Volume", row=2, col=1,
@@ -1111,6 +1340,7 @@ def tab_sentiment(tickers):
             range=[_range_start(1), _now_hkt().strftime("%Y-%m-%d")],
             rangeslider=dict(visible=False),
         )
+        _apply_rangeselector_layout(fig_ivh)
 
         # ── A4: IV snapshot table ─────────────────────────────────────────
         iv_tbl = ibkr_iv[["ticker", "snapshot_date", "iv_current",
@@ -1485,6 +1715,7 @@ def _build_cycle_chart(ticker: str) -> go.Figure:
         range=[_range_start(2), _cyc_today],
         rangeslider=dict(visible=False),
     )
+    _apply_rangeselector_layout(fig)
 
     return fig
 
@@ -1797,11 +2028,13 @@ def run_comparison(_, a_start, a_end, b_start, b_end, tickers):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def sc_prices_query(category: str, source: str = None) -> pd.DataFrame:
-    """Return price history for all products in a category (GPU/GPU-Enterprise/CPU/RAM)."""
+    """Return price history for all products in a category
+    (GPU/GPU-Enterprise/CPU/CPU-Enterprise/RAM)."""
     model_ids = list(
         ({**GPU_PRODUCTS}            if category == "GPU" else
          {**GPU_ENTERPRISE_PRODUCTS} if category == "GPU-Enterprise" else
          {**CPU_PRODUCTS}            if category == "CPU" else
+         {**CPU_ENTERPRISE_PRODUCTS} if category == "CPU-Enterprise" else
          {**RAM_PRODUCTS}).keys()
     )
     if not model_ids:
@@ -1828,8 +2061,105 @@ def sc_dram_query() -> pd.DataFrame:
     return query("SELECT * FROM sc_dram_spot ORDER BY product_type, period")
 
 
-def sc_btb_query() -> pd.DataFrame:
-    return query("SELECT * FROM sc_semi_btb ORDER BY period")
+# ── Memory unit normalization: USD/die → USD/GB ───────────────────────────────
+# `sc_dram_spot` stores TWO different price units in the same `price_usd` column:
+#   DDR4 / DDR5 / LPDDR5X → USD per benchmark DIE (one bare chip)
+#   HBM3 / HBM3E          → USD per GB of stack capacity
+# Comparing commodity DRAM against HBM on a single axis therefore requires
+# converting die prices to USD/GB. The divisor is a constant per product_type
+# because TrendForce quotes a fixed benchmark die density for each generation.
+# If a new benchmark die density is adopted upstream, update this map — a missing
+# entry silently falls back to 1.0 GB and understates the $/GB figure.
+_MEM_DIE_GB = {
+    "DDR4":    1.0,   # 8Gb  1Gx8 die = 1 GB
+    "DDR5":    2.0,   # 16Gb 2Gx8 die = 2 GB
+    "LPDDR5X": 2.0,   # 16Gb die      = 2 GB
+    "HBM3":    1.0,   # already quoted per GB
+    "HBM3E":   1.0,   # already quoted per GB
+}
+
+# Shared colour palette for every memory series. Used by BOTH the enterprise
+# price chart and the native-unit inline chart so the same generation is never
+# drawn in two different colours on the same page.
+_MEM_COLORS = {
+    "DDR4": "#74C0FC", "DDR5": "#51CF66",
+    "HBM3": "#CC5DE8", "HBM3E": "#FF6B6B",
+    "LPDDR5X": "#FFD43B",
+}
+
+# Native price unit per product_type (for the un-normalized inline chart).
+_MEM_UNIT_LABEL = {
+    "DDR4": "$/die", "DDR5": "$/die", "LPDDR5X": "$/die",
+    "HBM3": "$/GB",  "HBM3E": "$/GB",
+}
+
+# Device-level JEDEC specs. NOTE the bandwidth basis differs by class and is
+# stated explicitly in `bw_basis` — commodity DRAM bandwidth is only meaningful
+# per DIMM (64-bit bus), HBM only per stack (1024-bit bus). Never present these
+# numbers without the basis text.
+#   DDR4-3200 DIMM : 64-bit  × 3200 MT/s / 8 =   25.6 GB/s
+#   DDR5-6400 DIMM : 64-bit  × 6400 MT/s / 8 =   51.2 GB/s
+#   HBM3   8-Hi    : 1024-bit × 6400 MT/s / 8 =  819.2 GB/s
+#   HBM3E 12-Hi    : 1024-bit × 9200 MT/s / 8 = 1177.6 GB/s
+_MEM_SPECS = {
+    "DDR4":  {"bandwidth_gbs":   25.6, "capacity_gb": 1,  "config": "8Gb 1Gx8 die",
+              "bw_basis": "per DDR4-3200 DIMM (64-bit bus)",   "class": "Commodity DRAM"},
+    "DDR5":  {"bandwidth_gbs":   51.2, "capacity_gb": 2,  "config": "16Gb 2Gx8 die",
+              "bw_basis": "per DDR5-6400 DIMM (64-bit bus)",   "class": "Commodity DRAM"},
+    "HBM3":  {"bandwidth_gbs":  819.0, "capacity_gb": 48, "config": "8-Hi stack",
+              "bw_basis": "per 8-Hi stack (1024-bit bus)",     "class": "HBM"},
+    "HBM3E": {"bandwidth_gbs": 1177.0, "capacity_gb": 96, "config": "12-Hi stack",
+              "bw_basis": "per 12-Hi stack (1024-bit bus)",    "class": "HBM"},
+}
+
+# Order series consistently: commodity DRAM first, then HBM generations.
+_MEM_ORDER = ["DDR4", "DDR5", "HBM3", "HBM3E", "LPDDR5X"]
+
+
+def _mem_normalize_usd_per_gb(df: pd.DataFrame) -> pd.DataFrame:
+    """Add a `price_usd_gb` column to an sc_dram_spot frame.
+
+    Divides per-die prices by the benchmark die capacity (see `_MEM_DIE_GB`);
+    HBM rows pass through unchanged because they are already quoted per GB.
+    Also adds `period_dt` for date-axis plotting. Returns a copy — the caller's
+    frame is never mutated.
+    """
+    out = df.copy()
+    out["price_usd"] = pd.to_numeric(out["price_usd"], errors="coerce")
+    out["die_gb"] = out["product_type"].map(_MEM_DIE_GB).fillna(1.0)
+    out["price_usd_gb"] = out["price_usd"] / out["die_gb"]
+    out["period_dt"] = pd.to_datetime(out["period"].astype(str).str[:7] + "-01")
+    return out.sort_values(["product_type", "period"])
+
+
+def _mem_yoy(grp: pd.DataFrame, price_col: str = "price_usd_gb"):
+    """Year-on-year change anchored to the SERIES' own latest period.
+
+    Returns (latest_row, price_1y_ago, yoy_pct) with the latter two None when no
+    genuine ~12-month-earlier observation exists.
+
+    Anchoring on the series rather than on *today* matters: a superseded series
+    (HBM3 stops at 2023-12) otherwise matches its own final row as the "1Y ago"
+    price and reports a fabricated +0.0%.
+    """
+    grp = grp.sort_values("period_dt")
+    latest = grp.iloc[-1]
+    target = latest["period_dt"] - pd.DateOffset(months=12)
+    # Accept an anchor within a 12–18 month lookback; anything older is not a
+    # year-on-year comparison and is reported as "—".
+    floor = latest["period_dt"] - pd.DateOffset(months=18)
+    prior = grp[(grp["period_dt"] <= target) & (grp["period_dt"] >= floor)]
+    if prior.empty:
+        return latest, None, None
+    p_prev = prior.iloc[-1][price_col]
+    if not pd.notna(p_prev) or p_prev <= 0 or not pd.notna(latest[price_col]):
+        return latest, None, None
+    return latest, p_prev, (latest[price_col] / p_prev - 1) * 100
+
+
+def sc_demand_query() -> pd.DataFrame:
+    """Macro demand indicators (BACKLOG SC-06 / SC-00 fix B) — replaces sc_btb_query()."""
+    return query("SELECT * FROM sc_demand_indicators ORDER BY indicator_key, period")
 
 
 def sc_steam_query() -> pd.DataFrame:
@@ -2038,7 +2368,6 @@ def _sc_vs_etf_panel():
         yaxis_title="Index (Base = 100 at common start)",
         hovermode="x unified",
     )
-    fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     # Default view: 2Y so curated supply-chain indices (ending ~2025-05) and
     # the live ETF series are both visible on initial load.
     # ETF right-edge stays at today; 1Y/3Y/5Y buttons step backward from there.
@@ -2048,6 +2377,7 @@ def _sc_vs_etf_panel():
         range=[_range_start(2), _now_hkt().strftime("%Y-%m-%d")],
         rangeslider=dict(visible=False),
     )
+    _apply_rangeselector_layout(fig)
 
     # ── 6. Rolling 3-month correlation bar chart (GPU / CPU / RAM vs ETF) ────
     corr_cards = []
@@ -2146,6 +2476,8 @@ def _sc_vs_etf_panel():
                 range=[_range_start(2), _now_hkt().strftime("%Y-%m-%d")],
                 rangeslider=dict(visible=False),
             )
+            _apply_rangeselector_layout(fig_roll, legend_bottom=False,
+                                        extra_height=45)
         else:
             fig_roll = None
 
@@ -2255,7 +2587,7 @@ def _sc_vs_etf_panel():
     etf_note = (f"SOXX (iShares Semiconductor ETF)" if etf_ticker == "SOXX"
                 else f"{etf_ticker} (VanEck Semiconductor ETF — SOXX proxy until SOXX is crawled)")
     children.append(_source_footer(
-        f"NVIDIA/AMD/Intel enterprise ODP + TrendForce contract-price estimates (GPU/CPU/HBM)  ·  "
+        f"NVIDIA/AMD/Intel launch ODP (baseline) + {SRC_MODELED} (GPU/CPU/HBM contract-price trend)  ·  "
         f"Yahoo Finance / yfinance ({etf_note})",
         "GPU index = avg contract ASP across A100/H100/H200/B200/MI300X per month.  "
         "CPU index = avg ODP-derived ASP across Xeon Platinum + EPYC server SKUs.  "
@@ -2350,14 +2682,18 @@ def tab_supply_chain():
                 "ODP-derived ASP, core count vs price, generation transitions. "
                 "RAM: HBM3 / HBM3E per-stack contract price (SK Hynix / Samsung / Micron) + "
                 "consumer DDR4/DDR5 spot context. "
-                "Macro: SEMI NA equipment Book-to-Bill (leading capacity indicator). "
+                "Macro: TSMC/UMC monthly revenue, Korea chip exports, WSTS global billings, "
+                "SEMI WWSEMS equipment billings — genuinely published demand indicators, "
+                "not modeled estimates. "
                 "Fab utilisation: TSMC / Samsung / SK Hynix / Micron / Intel from earnings calls.",
                 style={"color": SUBTEXT, "fontSize": "12px", "margin": "0"},
             ),
             _source_footer(
-                "NVIDIA / AMD / Intel ODP · TrendForce · SEMI · SK Hynix / Samsung / Micron Earnings · "
-                "Valve Steam HW Survey (consumer context)",
-                "Each panel carries its own source attribution below.",
+                f"NVIDIA / AMD / Intel launch ODP · SK Hynix / Samsung / Micron Earnings · "
+                f"Valve Steam HW Survey · {SRC_PUBLISHED} / {SRC_MODELED} (see panels)",
+                "Each panel carries its own source attribution below — some series are "
+                "transcribed from a public release, others are this project's modeled "
+                "estimate; the per-panel footer states which.",
             ),
         ]),
 
@@ -2370,8 +2706,8 @@ def tab_supply_chain():
         # ── PANEL 4: Sales Volume — Steam Survey ──────────────────────────────
         _sc_steam_panel(),
 
-        # ── PANEL 5: Order Volume — SEMI B2B ─────────────────────────────────
-        _sc_btb_panel(),
+        # ── PANEL 5: Macro Demand Indicators (replaces SEMI B2B — SC-00/SC-06)
+        _sc_demand_panel(),
 
         # ── PANEL 5 + 6: Manufacturer Capacity & Occupancy ───────────────────
         _sc_capacity_panel(),
@@ -2391,66 +2727,61 @@ def _sc_dram_inline(height: int = 360) -> html.Div:
     df["price_usd"] = pd.to_numeric(df["price_usd"], errors="coerce")
     df = df.sort_values("period")
 
-    DRAM_COLORS = {
-        "DDR4": "#74C0FC", "DDR5": "#51CF66", "HBM3E": "#FF6B6B",
-        "HBM3": "#CC5DE8", "LPDDR5X": "#FFD43B",
-    }
-
-    # Unit label per product type:
-    #   DDR4 / DDR5  → price is per benchmark die (USD/die)
-    #   HBM3 / HBM3E → price is per GB of stack capacity (USD/GB)
-    _UNIT_LABEL = {
-        "DDR4": "$/die", "DDR5": "$/die",
-        "HBM3": "$/GB",  "HBM3E": "$/GB",
-        "LPDDR5X": "$/die",
-    }
-
     fig = go.Figure()
-    for ptype, grp in df.groupby("product_type"):
-        unit = _UNIT_LABEL.get(ptype, "USD")
+    for ptype in [p for p in _MEM_ORDER if p in set(df["product_type"])]:
+        grp  = df[df["product_type"] == ptype]
+        unit = _MEM_UNIT_LABEL.get(ptype, "USD")
         for spec, sub in grp.groupby("spec_label"):
             fig.add_trace(go.Scatter(
                 x=sub["period"], y=sub["price_usd"],
                 name=f"{ptype} — {spec}",
                 mode="lines+markers",
-                line=dict(width=2, color=DRAM_COLORS.get(ptype, ACCENT)),
+                line=dict(width=2, color=_MEM_COLORS.get(ptype, ACCENT)),
                 hovertemplate=(
                     f"<b>{ptype}</b> {spec}<br>"
-                    f"%{{x}}<br>${{y:.2f}} {unit}<extra></extra>"
+                    f"%{{x}}<br>$%{{y:.2f}} {unit}<extra></extra>"
                 ),
             ))
     fig.update_layout(
         **PLOTLY_TEMPLATE["layout"],
-        title="DRAM & HBM Spot / Contract Prices — DDR4/DDR5 (USD/die) · HBM3E (USD/GB)",
-        height=height, xaxis_title="Month", yaxis_title="Price (USD)",
+        title="DRAM & HBM Spot / Contract Prices — DDR4/DDR5 (USD/die) · HBM3/HBM3E (USD/GB)",
+        height=height, xaxis_title="Month", yaxis_title="Price (USD, mixed units)",
     )
-    # Anchor x-range to actual data end so initial 1Y view is not empty when
+    # Anchor x-range to actual data end so the initial view is not empty when
     # curated data lags today.  stepmode="backward" buttons stay relative to
     # the right edge, so 1Y/3Y/5Y still work correctly.
+    # Default is 5Y, NOT 1Y: HBM3 pricing stops at 2023-12, so a trailing-1Y
+    # window renders its legend entry with no visible line.
     _dram_end_dt  = pd.to_datetime(df.sort_values("period")["period"].iloc[-1][:7] + "-01")
     _dram_rend    = (_dram_end_dt + pd.DateOffset(months=2)).strftime("%Y-%m-%d")
-    _dram_rstart  = (_dram_end_dt - pd.DateOffset(years=1)).strftime("%Y-%m-%d")
+    _dram_rstart  = (_dram_end_dt - pd.DateOffset(years=5)).strftime("%Y-%m-%d")
     fig.update_xaxes(
         type="date",
-        rangeselector=_time_rangeselector(active_index=0),   # 1Y default
+        rangeselector=_time_rangeselector(active_index=2),   # 5Y default
         range=[_dram_rstart, _dram_rend],
         rangeslider=dict(visible=False),
     )
+    _apply_rangeselector_layout(fig)
 
-    # YoY delta table
-    latest = df.sort_values("period").groupby(["product_type", "spec_label"]).last()
-    prior_df = df[df["period"] <= (pd.to_datetime(df["period"].max()) - pd.DateOffset(months=12))
-                 .strftime("%Y-%m")].groupby(["product_type", "spec_label"])["price_usd"].last()
+    # YoY delta table. Anchored per-series via `_mem_yoy` — anchoring on the
+    # global max period instead makes a superseded series (HBM3 ends 2023-12)
+    # match its own final row and report a fabricated +0.0%.
+    _dfy = df.copy()
+    _dfy["period_dt"] = pd.to_datetime(_dfy["period"].astype(str).str[:7] + "-01")
+    _newest = _dfy["period"].max()
     rows_tbl = []
-    for idx, row in latest.iterrows():
-        p_now  = row["price_usd"]
-        p_prev = prior_df.get(idx)
-        yoy    = ((p_now / p_prev - 1) * 100) if p_prev and p_prev > 0 else None
+    for (ptype, spec), grp in _dfy.groupby(["product_type", "spec_label"]):
+        latest, p_prev, yoy = _mem_yoy(grp, price_col="price_usd")
         rows_tbl.append({
-            "Type": idx[0], "Spec": idx[1], "Period": row["period"],
-            "Spot Price (USD)": f"${p_now:.2f}",
+            "Type": ptype, "Spec": spec, "Period": str(latest["period"]),
+            "Unit": _MEM_UNIT_LABEL.get(ptype, "USD"),
+            "Spot Price": (f"${latest['price_usd']:.2f}"
+                           if pd.notna(latest["price_usd"]) else "—"),
             "YoY Δ": f"{yoy:+.1f}%" if yoy is not None else "—",
-            "Source": row.get("source", "TrendForce"),
+            # Zero-hallucination default (§8/SC-05): an unlabeled row must never
+            # silently read as a published TrendForce figure — fall back to the
+            # more conservative "modeled" label, not the institutional name.
+            "Source": latest.get("source", SRC_MODELED),
         })
     tbl_df = pd.DataFrame(rows_tbl)
     tbl = dash_table.DataTable(
@@ -2466,21 +2797,30 @@ def _sc_dram_inline(height: int = 360) -> html.Div:
              "color": GREEN, "fontWeight": "600"},
             {"if": {"filter_query": '{YoY Δ} contains "-"', "column_id": "YoY Δ"},
              "color": RED, "fontWeight": "600"},
+            {"if": {"filter_query": '{Period} != "%s"' % _newest, "column_id": "Period"},
+             "color": YELLOW, "fontWeight": "600"},
+            # SC-05: visibly distinguish published vs. modeled provenance per row.
+            {"if": {"filter_query": '{Source} = "%s"' % SRC_MODELED, "column_id": "Source"},
+             "color": YELLOW},
+            {"if": {"filter_query": '{Source} = "%s"' % SRC_PUBLISHED, "column_id": "Source"},
+             "color": GREEN},
             {"if": {"row_index": "odd"}, "backgroundColor": BG2},
         ],
     )
 
     dram_note = html.P(
-        "This chart tracks two distinct pricing layers of the memory market. "
+        "This chart shows each series in its ORIGINAL quoted unit — for a like-for-like "
+        "comparison see the normalized USD/GB chart above. "
         "DDR4 (8Gb die) and DDR5 (16Gb die) are quoted in USD per benchmark die — "
         "the single bare chip that OEMs solder onto a DIMM; these prices move with "
         "consumer PC demand and inventory cycles. "
-        "HBM3E is quoted in USD per GB of stack capacity — a contract price "
+        "HBM3 and HBM3E are quoted in USD per GB of stack capacity — a contract price "
         "negotiated between SK Hynix / Samsung / Micron and hyperscalers such as "
-        "NVIDIA and Google; it reflects AI accelerator supply tightness rather than "
-        "consumer demand. Because the two series use different units they should be "
-        "read independently — focus on the direction and rate of change for each, "
-        "not on comparing absolute levels across series.",
+        "NVIDIA and Google; they reflect AI accelerator supply tightness rather than "
+        "consumer demand. Because the two layers use different units they should be "
+        "read independently here — focus on the direction and rate of change for each, "
+        "not on comparing absolute levels across series. HBM3 pricing ends Dec 2023 "
+        "(superseded by HBM3E); an amber period marks a series that is no longer quoted.",
         style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "10px"},
     )
 
@@ -2493,10 +2833,16 @@ def _sc_dram_inline(height: int = 360) -> html.Div:
         _card([
             _section_title("DRAM & HBM — Latest Spot Prices & Year-on-Year Change"),
             tbl,
-            _source_footer("TrendForce / DRAMeXchange",
-                           "DDR4 8Gb 1Gx8 & DDR5 16Gb 2Gx8: weekly spot benchmark die price (USD/die). "
-                           "HBM3E 12-Hi: estimated contract price per GB of stack capacity (USD/GB). "
-                           "⚠ DDR4/DDR5 and HBM3E use different units — do not compare absolute levels across series. "
+            _source_footer(f"{SRC_PUBLISHED} (DDR4/DDR5) / {SRC_MODELED} (HBM3/HBM3E)",
+                           "DDR4 8Gb 1Gx8 & DDR5 16Gb 2Gx8: transcribed from TrendForce/DRAMeXchange's free "
+                           "weekly spot-price articles (USD/die) — a public release, not a licensed feed. "
+                           "HBM3 8-Hi / HBM3E 12-Hi: contract price per GB (USD/GB) — never publicly quoted, "
+                           "so this project's own estimate from secondary commentary; see the Source column "
+                           "above for the label on each row. "
+                           "⚠ Native units — DDR4/DDR5 and HBM3/HBM3E are NOT comparable in absolute terms on this "
+                           "chart; the USD/GB-normalized chart above is the like-for-like view. "
+                           "YoY is anchored to each series' own latest observation, so a superseded series reports "
+                           "'—' rather than a false 0.0%. "
                            "Update CURATED_DRAM_SPOT in products_config.py monthly."),
         ]),
     ])
@@ -2561,7 +2907,6 @@ def _sc_enterprise_gpu_section():
         title="Enterprise GPU — Estimated Contract/Spot Price (USD/card)",
         height=400, xaxis_title="", yaxis_title="Price (USD / card)",
     )
-    fig_price.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
 
     # Flagship-era shaded backgrounds
     for (era_label, x0, x1, fill, tc, short) in FLAGSHIP_ERAS:
@@ -2594,6 +2939,7 @@ def _sc_enterprise_gpu_section():
         range=[_pr_rstart, _pr_rend],
         rangeslider=dict(visible=False),
     )
+    _apply_rangeselector_layout(fig_price, extra_height=90)
 
     # ── FP16 TFLOPS vs Latest Price scatter ──────────────────────────────────
     # Use specs from GPU_ENTERPRISE_PRODUCTS.tflops_fp16_dense
@@ -2714,11 +3060,14 @@ def _sc_enterprise_gpu_section():
         ]),
         yoy_section,
         _card(_source_footer(
-            "NVIDIA / AMD Official Specs · TrendForce Enterprise GPU Channel Estimates · "
-            "Goldman Sachs / Wells Fargo Semiconductor Research · Public Cloud GPU Spot Pricing",
-            "Prices are estimated per-card contract/spot prices (USD). "
+            f"NVIDIA / AMD Official Specs (hardware) · {SRC_MODELED} (pricing)",
+            "Hardware specs (VRAM, FP16 Dense TFLOPS — no sparsity multiplier) are from "
+            "official datasheets — a primary source. "
+            "Contract/spot PRICES are this project's modeled estimate, informed by TrendForce "
+            "enterprise-GPU channel commentary, public cloud GPU spot pricing, and analyst "
+            "research (Goldman Sachs / Wells Fargo) — none of those are a licensed feed this "
+            "project holds, so treat price levels as directional, not quoted. "
             "Not retail — enterprise GPUs are sold via OEM/cloud channels. "
-            "FP16 Dense TFLOPS from official datasheets (no sparsity multiplier). "
             "Flagship eras: Ampere (A100) → Hopper (H100) → Hopper+ (H200) → Blackwell (B200). "
             "Update GPU_ENTERPRISE_PRODUCTS in products_config.py monthly.",
         )),
@@ -2745,27 +3094,53 @@ def _sc_enterprise_cpu_section():
         ("2022-11-01", "EPYC 9654 GA\n(Genoa, Zen 4)",         "#ED1C24"),
         ("2023-01-01", "Xeon 8490H GA\n(Sapphire Rapids)",     "#9d7dea"),
         ("2024-01-01", "Xeon 8592+ GA\n(Emerald Rapids)",      "#0071C5"),
-        ("2024-10-01", "EPYC 9965 GA\n(Turin, Zen 5)",         "#00C8B4"),
+        ("2024-10-01", "EPYC 9965 GA\n(Turin, Zen 5)",         "#FF9E1B"),
     ]
+    # Warm hues = AMD, cool hues = Intel, so vendor is readable at a glance.
+    # EPYC-9965 is deliberately amber, NOT the teal it used to be: it tracks
+    # within $800 of Xeon-8592+ for every one of their 20 shared months, and
+    # teal-next-to-blue made that the least separable pair on the chart.
     COLOR_BY_MODEL = {
-        "EPYC-9654":  "#ED1C24",
-        "Xeon-8490H": "#9d7dea",
-        "Xeon-8592+": "#0071C5",
-        "EPYC-9965":  "#00C8B4",
+        "EPYC-9654":  "#ED1C24",   # AMD red
+        "EPYC-9965":  "#FF9E1B",   # AMD amber
+        "Xeon-8490H": "#9d7dea",   # Intel violet
+        "Xeon-8592+": "#0071C5",   # Intel blue
+    }
+    # Colour still is not enough on its own, so pair every colour with a
+    # distinct dash pattern + marker symbol — this keeps the series readable
+    # where they converge, in greyscale, and for colour-blind users.
+    # Labels are deliberately short — the DB `name` is verbose ("AMD EPYC 9654
+    # (96-core, Genoa)") and four of those in a horizontal legend wrap over the
+    # chart title. These still carry SKU, core count and generation.
+    STYLE_BY_MODEL = {
+        # model_id:   (dash,      marker symbol,  legend label)
+        "EPYC-9654":  ("solid",   "circle",       "EPYC 9654 · 96C Genoa"),
+        "Xeon-8490H": ("dash",    "square",       "Xeon 8490H · 60C SPR"),
+        "Xeon-8592+": ("dot",     "diamond",      "Xeon 8592+ · 60C EMR"),
+        "EPYC-9965":  ("dashdot", "triangle-up",  "EPYC 9965 · 192C Turin"),
     }
 
     # ── Price history line chart ──────────────────────────────────────────────
     fig_price = go.Figure()
     if not df_curated.empty:
-        for mid, grp in df_curated.groupby("model_id"):
+        # Sort traces so the legend reads in a stable, vendor-grouped order
+        # rather than whatever order groupby happens to yield.
+        _order = list(STYLE_BY_MODEL.keys())
+        _groups = sorted(
+            df_curated.groupby("model_id"),
+            key=lambda kv: (_order.index(kv[0]) if kv[0] in _order else 99, kv[0]),
+        )
+        for mid, grp in _groups:
             grp = grp.sort_values("date")
             prod_name = grp["name"].iloc[0] if "name" in grp.columns else mid
             col = COLOR_BY_MODEL.get(mid, CHART_COLORS[0])
+            dash, symbol, legend_name = STYLE_BY_MODEL.get(
+                mid, ("solid", "circle", prod_name))
             fig_price.add_trace(go.Scatter(
                 x=grp["date"], y=grp["price_usd"],
-                name=prod_name, mode="lines+markers",
-                line=dict(width=2.5, color=col),
-                marker=dict(size=4),
+                name=legend_name, mode="lines+markers",
+                line=dict(width=2.5, color=col, dash=dash),
+                marker=dict(size=6, symbol=symbol, color=col),
                 hovertemplate=(
                     f"<b>{prod_name}</b><br>%{{x|%b %Y}}<br>"
                     f"Price: $%{{y:,.0f}}<extra></extra>"
@@ -2777,7 +3152,6 @@ def _sc_enterprise_cpu_section():
         title="Enterprise CPU — Estimated ODP / Contract ASP (USD/socket)",
         height=400, xaxis_title="", yaxis_title="Price (USD / socket)",
     )
-    fig_price.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
 
     for (era_label, x0, x1, fill, tc, short) in CPU_ERAS:
         fig_price.add_vrect(
@@ -2806,6 +3180,7 @@ def _sc_enterprise_cpu_section():
         range=[_pr_rstart, _pr_rend],
         rangeslider=dict(visible=False),
     )
+    _apply_rangeselector_layout(fig_price, extra_height=90)
 
     # ── Core Count vs Latest Price scatter (enterprise perf/$) ──────────────
     fig_perf = go.Figure()
@@ -2929,11 +3304,14 @@ def _sc_enterprise_cpu_section():
         ]),
         yoy_section,
         _card(_source_footer(
-            "AMD / Intel Official Distributor Price (ODP) · TrendForce Server CPU Channel Estimates · "
-            "Gartner / IDC Server Market Research",
-            "Prices are per-socket ODP-derived contract ASP estimates (USD). "
+            f"AMD / Intel Official Launch ODP (baseline) · {SRC_MODELED} (ASP trend)",
+            "Launch-date list price (Official Distributor Price) and core counts are from "
+            "official product launch data — a primary source. "
+            "The monthly ASP TREND is this project's modeled estimate, informed by TrendForce "
+            "server-CPU channel commentary and Gartner/IDC server-market research — none of "
+            "those are a licensed feed this project holds, so treat price levels as "
+            "directional, not quoted. "
             "Not consumer/retail — enterprise CPUs are sold direct to OEMs and hyperscalers. "
-            "Core counts from official product launch data. "
             "Generations: Genoa (EPYC 9004, Nov 2022) → Sapphire Rapids (Xeon Gen 4, Jan 2023) → "
             "Emerald Rapids (Xeon Gen 5, Jan 2024) → Turin (EPYC 9005, Oct 2024). "
             "Update CPU_ENTERPRISE_PRODUCTS in products_config.py quarterly.",
@@ -2943,60 +3321,56 @@ def _sc_enterprise_cpu_section():
 
 def _sc_enterprise_ram_section():
     """
-    Enterprise / AI-accelerator HBM price index with:
-    - HBM3 and HBM3E contract price history (USD/GB) with generation era shading
-    - Key generation GA vertical annotations
-    - Memory bandwidth (GB/s per stack) vs latest spot price scatter
-    - YoY price change table
-    - Consumer DRAM inline section below for context
+    Enterprise memory price index covering BOTH commodity DRAM and HBM:
+    - DDR4 / DDR5 / HBM3 / HBM3E price history normalized to USD per GB
+      (see `_mem_normalize_usd_per_gb` — DDR is quoted per die upstream)
+    - HBM generation era shading + GA vertical annotations
+    - Memory bandwidth vs latest price scatter (log y: DRAM and HBM differ ~46x)
+    - YoY price change table with an "As of" column so superseded series are
+      visibly stale rather than silently presented as current
+    - Native-unit DRAM inline section below for context
     """
     df_all = sc_dram_query()
-    df_hbm = df_all[df_all["product_type"].isin(["HBM3", "HBM3E"])].copy()
+    df_mem = df_all[df_all["product_type"].isin(_MEM_SPECS.keys())].copy()
+    if not df_mem.empty:
+        df_mem = _mem_normalize_usd_per_gb(df_mem)
 
     # ── Generation era definitions ────────────────────────────────────────────
     HBM_ERAS = [
-        ("HBM3 Era",  "2022-06-01", "2023-12-31", "rgba(0,113,197,0.07)",  "#0071C5", "HBM3"),
-        ("HBM3E Era", "2024-01-01", "2026-07-31", "rgba(118,185,0,0.07)",  "#76b900", "HBM3E"),
+        ("HBM3 Era",  "2022-06-01", "2023-12-31", "rgba(204,93,232,0.07)", "#CC5DE8", "HBM3"),
+        ("HBM3E Era", "2024-01-01", "2026-07-31", "rgba(255,107,107,0.07)", "#FF6B6B", "HBM3E"),
     ]
     HBM_MARKERS = [
-        ("2022-06-01", "HBM3 GA (SK Hynix)",    "#0071C5"),
-        ("2024-01-01", "HBM3E GA (H100/MI300X)", "#76b900"),
+        ("2022-06-01", "HBM3 GA (SK Hynix)",    "#CC5DE8"),
+        ("2024-01-01", "HBM3E GA (H100/MI300X)", "#FF6B6B"),
     ]
-    HBM_COLORS = {
-        "HBM3":  "#0071C5",
-        "HBM3E": "#76b900",
-    }
-    # Per-stack bandwidth: speed_mhz × 1024-bit interface / 8 / 1000 (→ GB/s)
-    HBM_SPECS = {
-        "HBM3":  {"bandwidth_gbs": 819,  "capacity_gb": 48, "config": "8-Hi"},
-        "HBM3E": {"bandwidth_gbs": 1177, "capacity_gb": 96, "config": "12-Hi"},
-    }
 
-    # ── Price history line chart ──────────────────────────────────────────────
+    # ── Price history line chart (all series on one USD/GB axis) ──────────────
     fig_price = go.Figure()
-    if not df_hbm.empty:
-        df_hbm["period_dt"] = pd.to_datetime(df_hbm["period"] + "-01")
-        for ptype, grp in df_hbm.groupby("product_type"):
-            grp = grp.sort_values("period_dt")
-            col = HBM_COLORS.get(ptype, CHART_COLORS[0])
+    if not df_mem.empty:
+        for ptype in [p for p in _MEM_ORDER if p in set(df_mem["product_type"])]:
+            grp = df_mem[df_mem["product_type"] == ptype].sort_values("period_dt")
+            spec = _MEM_SPECS.get(ptype, {})
+            col  = _MEM_COLORS.get(ptype, CHART_COLORS[0])
+            is_hbm = spec.get("class") == "HBM"
             fig_price.add_trace(go.Scatter(
-                x=grp["period_dt"], y=grp["price_usd"],
-                name=ptype,
+                x=grp["period_dt"], y=grp["price_usd_gb"],
+                name=f"{ptype} ({spec.get('config', '')})",
                 mode="lines+markers",
-                line=dict(width=2.5, color=col),
+                line=dict(width=2.5, color=col,
+                          dash="solid" if is_hbm else "dot"),
                 marker=dict(size=5),
                 hovertemplate=(
-                    f"<b>{ptype}</b><br>%{{x|%b %Y}}<br>"
-                    f"$%{{y:.2f}}/GB<extra></extra>"
+                    f"<b>{ptype}</b> — {spec.get('class', '')}<br>%{{x|%b %Y}}<br>"
+                    f"$%{{y:.2f}} / GB<extra></extra>"
                 ),
             ))
 
     fig_price.update_layout(
         **PLOTLY_TEMPLATE["layout"],
-        title="Enterprise RAM (HBM) — Estimated Contract Price (USD/GB)",
-        height=400, xaxis_title="", yaxis_title="Contract Price (USD / GB)",
+        title="Enterprise Memory — DRAM & HBM Price, Normalized (USD per GB)",
+        height=400, xaxis_title="", yaxis_title="Price (USD / GB)",
     )
-    fig_price.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
 
     for (era_label, x0, x1, fill, tc, short) in HBM_ERAS:
         fig_price.add_vrect(
@@ -3012,97 +3386,97 @@ def _sc_enterprise_ram_section():
             annotation=dict(font_size=9, font_color=col, textangle=-90, yshift=-10),
         )
 
-    # Anchor to data end; default 3Y view (covers HBM3 → HBM3E transition)
-    if not df_hbm.empty:
-        _end_dt  = pd.to_datetime(df_hbm["period"].max() + "-01")
+    # Anchor to data end; default 5Y view. This MUST stay wide enough to cover
+    # the oldest series: HBM3 ends 2023-12, so a trailing-1Y window pushed it
+    # entirely off-screen — the legend entry rendered but the line did not.
+    if not df_mem.empty:
+        _end_dt  = df_mem["period_dt"].max()
         _rend    = (_end_dt + pd.DateOffset(months=2)).strftime("%Y-%m-%d")
-        _rstart  = (_end_dt - pd.DateOffset(years=1)).strftime("%Y-%m-%d")
+        _rstart  = (_end_dt - pd.DateOffset(years=5)).strftime("%Y-%m-%d")
     else:
         _rend   = _now_hkt().strftime("%Y-%m-%d")
-        _rstart = _range_start(1)
+        _rstart = _range_start(5)
     fig_price.update_xaxes(
         type="date",
-        rangeselector=_time_rangeselector(active_index=1),   # 3Y default
+        rangeselector=_time_rangeselector(active_index=2),   # 5Y default
         range=[_rstart, _rend],
         rangeslider=dict(visible=False),
     )
+    _apply_rangeselector_layout(fig_price, extra_height=90)
 
-    # ── Bandwidth vs Latest Spot Price scatter ────────────────────────────────
+    # ── Bandwidth vs Latest Price scatter ─────────────────────────────────────
+    # Log y-axis: commodity DIMM bandwidth (25.6 GB/s) and HBM stack bandwidth
+    # (1177 GB/s) span ~46x, which flattens DDR4/DDR5 to the axis on a linear
+    # scale. Bandwidth bases differ by class — see `_MEM_SPECS.bw_basis`.
     fig_perf = go.Figure()
-    if not df_hbm.empty:
-        latest_hbm = (df_hbm.sort_values("period")
-                      .groupby("product_type")[["price_usd"]]
-                      .last()
-                      .reset_index())
-        for _, row in latest_hbm.iterrows():
-            ptype = row["product_type"]
-            specs = HBM_SPECS.get(ptype)
-            if specs is None or pd.isna(row["price_usd"]):
+    if not df_mem.empty:
+        for ptype in [p for p in _MEM_ORDER if p in set(df_mem["product_type"])]:
+            grp = df_mem[df_mem["product_type"] == ptype]
+            specs = _MEM_SPECS.get(ptype)
+            latest, _, _ = _mem_yoy(grp)
+            if specs is None or pd.isna(latest["price_usd_gb"]):
                 continue
-            col = HBM_COLORS.get(ptype, CHART_COLORS[0])
+            col = _MEM_COLORS.get(ptype, CHART_COLORS[0])
             bw  = specs["bandwidth_gbs"]
             cap = specs["capacity_gb"]
             cfg = specs["config"]
             fig_perf.add_trace(go.Scatter(
-                x=[row["price_usd"]], y=[bw],
+                x=[latest["price_usd_gb"]], y=[bw],
                 mode="markers+text",
                 name=ptype,
                 text=[ptype],
-                textposition="top center",
+                # DDR4/DDR5 sit within ~$0.04 of each other on the x-axis, so
+                # centre-anchored labels collide; offset them sideways.
+                textposition="top center" if specs["class"] == "HBM" else "middle right",
                 textfont=dict(size=10),
-                marker=dict(size=16, color=col, line=dict(width=1, color="#30363d")),
+                marker=dict(
+                    size=16, color=col,
+                    symbol="circle" if specs["class"] == "HBM" else "diamond",
+                    line=dict(width=1, color="#30363d"),
+                ),
                 hovertemplate=(
-                    f"<b>{ptype} ({cfg})</b><br>Spot: $%{{x:.2f}}/GB<br>"
-                    f"Bandwidth: {bw} GB/s per stack<br>"
-                    f"Capacity: {cap} GB per stack<extra></extra>"
+                    f"<b>{ptype} ({cfg})</b> — {specs['class']}<br>"
+                    f"Price: $%{{x:.2f}}/GB (as of {latest['period']})<br>"
+                    f"Bandwidth: {bw:g} GB/s {specs['bw_basis']}<br>"
+                    f"Capacity: {cap} GB per device<extra></extra>"
                 ),
             ))
     fig_perf.update_layout(
         **PLOTLY_TEMPLATE["layout"],
-        title="HBM — Memory Bandwidth vs Spot Price",
+        title="DRAM vs HBM — Memory Bandwidth vs Price per GB",
         height=360,
-        xaxis_title="Latest Contract Price (USD / GB)",
-        yaxis_title="Memory Bandwidth (GB/s per stack)",
+        xaxis_title="Latest Price (USD / GB)",
+        yaxis_title="Bandwidth (GB/s per DIMM ◆ / per stack ●, log)",
         showlegend=False,
     )
+    fig_perf.update_yaxes(type="log")
 
     # ── YoY price change table ────────────────────────────────────────────────
     yoy_section = html.Span()
-    if not df_hbm.empty:
-        latest_snap = (df_hbm.sort_values("period")
-                       .groupby("product_type")
-                       .last()
-                       .reset_index()[["product_type", "period", "price_usd", "source"]])
-        _cutoff_1y = (pd.Timestamp(_now_hkt()) - pd.DateOffset(months=12)).strftime("%Y-%m")
-        prior_1y = (df_hbm[df_hbm["period"] <= _cutoff_1y]
-                    .sort_values("period")
-                    .groupby("product_type")["price_usd"]
-                    .last()
-                    .rename("price_1y_ago"))
-        yoy_df = latest_snap.merge(prior_1y, on="product_type", how="left")
-        yoy_df["YoY Δ"] = yoy_df.apply(
-            lambda r: f"{(r['price_usd'] / r['price_1y_ago'] - 1) * 100:+.1f}%"
-                      if pd.notna(r.get("price_1y_ago")) and r["price_1y_ago"] > 0 else "—",
-            axis=1,
-        )
-        yoy_df["Bandwidth (GB/s)"] = yoy_df["product_type"].map(
-            {k: str(v["bandwidth_gbs"]) for k, v in HBM_SPECS.items()}
-        ).fillna("—")
-        yoy_df["Capacity (GB)"] = yoy_df["product_type"].map(
-            {k: str(v["capacity_gb"]) for k, v in HBM_SPECS.items()}
-        ).fillna("—")
-        yoy_df = yoy_df.rename(columns={
-            "product_type": "Generation", "period": "As of",
-            "price_usd": "Spot Price (USD/GB)", "price_1y_ago": "Price 1Y Ago (USD/GB)",
-        })
-        yoy_df["Spot Price (USD/GB)"]     = yoy_df["Spot Price (USD/GB)"].map(
-            lambda x: f"${x:.2f}" if pd.notna(x) else "—")
-        yoy_df["Price 1Y Ago (USD/GB)"]   = yoy_df["Price 1Y Ago (USD/GB)"].map(
-            lambda x: f"${x:.2f}" if pd.notna(x) else "—")
-        yoy_df = yoy_df[[
-            "Generation", "Bandwidth (GB/s)", "Capacity (GB)",
-            "Spot Price (USD/GB)", "Price 1Y Ago (USD/GB)", "YoY Δ", "source",
-        ]]
+    if not df_mem.empty:
+        _newest_period = df_mem["period"].max()
+        _hbm3e_price = None
+        rows = []
+        for ptype in [p for p in _MEM_ORDER if p in set(df_mem["product_type"])]:
+            grp = df_mem[df_mem["product_type"] == ptype]
+            specs = _MEM_SPECS.get(ptype, {})
+            latest, p_prev, yoy = _mem_yoy(grp)
+            if ptype == "HBM3E":
+                _hbm3e_price = latest["price_usd_gb"]
+            rows.append({
+                "Class": specs.get("class", "—"),
+                "Generation": ptype,
+                "Device": specs.get("config", "—"),
+                "Bandwidth (GB/s)": f"{specs['bandwidth_gbs']:g}" if specs else "—",
+                "Capacity (GB)": str(specs.get("capacity_gb", "—")),
+                "Price (USD/GB)": (f"${latest['price_usd_gb']:.2f}"
+                                   if pd.notna(latest["price_usd_gb"]) else "—"),
+                "Price 1Y Ago (USD/GB)": f"${p_prev:.2f}" if p_prev is not None else "—",
+                "YoY Δ": f"{yoy:+.1f}%" if yoy is not None else "—",
+                "As of": str(latest["period"]),
+                "Source": latest.get("source", SRC_MODELED),
+            })
+        yoy_df = pd.DataFrame(rows)
         yoy_tbl = dash_table.DataTable(
             data=yoy_df.to_dict("records"),
             columns=[{"name": c, "id": c} for c in yoy_df.columns],
@@ -3119,10 +3493,30 @@ def _sc_enterprise_ram_section():
                  "color": GREEN, "fontWeight": "600"},
                 {"if": {"filter_query": '{YoY Δ} contains "-"', "column_id": "YoY Δ"},
                  "color": RED, "fontWeight": "600"},
+                # Flag superseded series: any row whose latest observation is
+                # older than the newest period in the table is NOT current data.
+                {"if": {"filter_query": '{As of} != "%s"' % _newest_period,
+                        "column_id": "As of"},
+                 "color": YELLOW, "fontWeight": "600"},
+                {"if": {"filter_query": '{Class} eq "HBM"', "column_id": "Generation"},
+                 "fontWeight": "600"},
             ],
         )
+        # Headline ratio: the whole point of normalizing to USD/GB.
+        _ddr5 = df_mem[df_mem["product_type"] == "DDR5"]
+        premium_note = html.Span()
+        if _hbm3e_price and not _ddr5.empty:
+            _d5_latest, _, _ = _mem_yoy(_ddr5)
+            if pd.notna(_d5_latest["price_usd_gb"]) and _d5_latest["price_usd_gb"] > 0:
+                premium_note = html.P(
+                    f"HBM3E carries a {_hbm3e_price / _d5_latest['price_usd_gb']:.1f}× "
+                    f"price premium over commodity DDR5 on a per-GB basis "
+                    f"(${_hbm3e_price:.2f} vs ${_d5_latest['price_usd_gb']:.2f} per GB).",
+                    style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "8px"},
+                )
         yoy_section = _card([
-            _section_title("HBM — Latest Contract Prices & Year-on-Year Change"),
+            _section_title("DRAM & HBM — Latest Prices per GB & Year-on-Year Change"),
+            premium_note,
             yoy_tbl,
         ])
 
@@ -3133,12 +3527,22 @@ def _sc_enterprise_ram_section():
         ]),
         yoy_section,
         _card(_source_footer(
-            "TrendForce / DRAMeXchange · SK Hynix / Samsung / Micron Earnings Transcripts",
-            "HBM3 8-Hi and HBM3E 12-Hi: estimated contract prices per GB of stack capacity (USD/GB). "
-            "Sold exclusively to hyperscalers and AI chip OEMs (NVIDIA, AMD, Google, Microsoft). "
-            "Bandwidth calculated from JEDEC spec: speed_MT/s × 1024-bit interface / 8. "
-            "HBM3 era: Jun 2022 – Dec 2023 (SK Hynix primary, Samsung qualified Q4 2022). "
-            "HBM3E era: Jan 2024 onward (12-Hi stack, 96 GB, first shipped in H200/MI300X). "
+            f"{SRC_PUBLISHED} (DDR4/DDR5) / {SRC_MODELED} (HBM3/HBM3E) · "
+            "SK Hynix / Samsung / Micron Earnings Transcripts",
+            "⚠ DERIVED FIGURES — DDR4/DDR5 are sourced as USD per benchmark die (transcribed "
+            "from a TrendForce/DRAMeXchange public release) and are "
+            "converted here to USD/GB by dividing by the die's own capacity "
+            "(DDR4 8Gb 1Gx8 die = 1 GB; DDR5 16Gb 2Gx8 die = 2 GB). HBM3/HBM3E are "
+            "sourced already quoted per GB of stack capacity and pass through unchanged — "
+            "contract pricing here is never publicly quoted, so it is this project's modeled "
+            "estimate (see the per-row Source column in the table above). "
+            "Bandwidth bases are NOT comparable device-for-device: commodity DRAM is quoted "
+            "per DIMM (64-bit bus), HBM per stack (1024-bit bus) — see the ◆/● markers. "
+            "Bandwidth from JEDEC spec: speed_MT/s × bus width / 8. "
+            "HBM is sold only to hyperscalers and AI chip OEMs (NVIDIA, AMD, Google, Microsoft). "
+            "HBM3 era: Jun 2022 – Dec 2023; HBM3E era: Jan 2024 onward (12-Hi, 96 GB, H200/MI300X). "
+            "An amber 'As of' date marks a superseded series that is no longer quoted — "
+            "HBM3 pricing stops at 2023-12 and is shown for generational context only. "
             "Update CURATED_DRAM_SPOT in products_config.py monthly.",
         )),
         html.Div(style={"marginTop": "8px"}),
@@ -3201,6 +3605,7 @@ def _sc_price_section(category: str):
         range=[_pr_rstart, _pr_rend],
         rangeslider=dict(visible=False),
     )
+    _apply_rangeselector_layout(fig_price)
 
     # ── Performance / Price scatter ───────────────────────────────────────
     fig_pp = go.Figure()
@@ -3378,11 +3783,12 @@ def _sc_price_section(category: str):
         dram_section,
         delivery_section,
         _card(_source_footer(
-            "PassMark Performance Test / Newegg / TrendForce / Curated Market Data",
-            "Price history: PassMark benchmark database (GPU/CPU) or curated retail pricing. "
+            f"PassMark / Newegg (live) · {CURATED_RETAIL_PROVENANCE} (historical curated pricing)",
+            "Today's price + stock status: live PassMark benchmark database / Newegg listing. "
+            "Historical/pre-launch price trend (source='curated' rows): this project's modeled "
+            "reconstruction from public retail listings — not a licensed TrendForce feed. "
             "YoY: latest vs same month prior year. "
             "Performance/Price scatter: PassMark Score vs retail USD. "
-            "Stock status: Newegg live listing. "
             "Run supply_chain_crawler.py to refresh.",
         )),
     ])
@@ -3441,8 +3847,38 @@ def _sc_steam_panel():
     fig_pie.update_layout(**PLOTLY_TEMPLATE["layout"],
                            title="GPU Vendor Share", height=300)
 
+    # Observation date must be visible: this panel sat on a 17-month-old snapshot
+    # with no on-screen indication it had stopped updating (CLAUDE.md §7.3,
+    # BACKLOG SC-02). `period` is the survey's own month, never today's date.
+    _as_of = str(df["period"].max())
+    try:
+        _months_old = (pd.Timestamp.today().to_period("M")
+                       - pd.Period(_as_of, freq="M")).n
+    except Exception:
+        _months_old = None
+    # Valve publishes with a 1–3 month lag, so only flag at 4+ months — a badge
+    # that cries wolf on normal publication lag gets ignored when it matters.
+    _stale = _months_old is not None and _months_old >= 4
+    _as_of_badge = html.Div(
+        [
+            html.Span(f"As of {_as_of}", style={"fontWeight": "700"}),
+            html.Span(
+                f"  ·  {_months_old} months old — live crawl may have stopped; see BACKLOG SC-02"
+                if _stale else "  ·  current",
+                style={"opacity": "0.85"},
+            ),
+        ],
+        style={
+            "color": RED if _stale else SUBTEXT, "fontSize": "11px",
+            "marginBottom": "8px",
+            "border": f"1px solid {RED}" if _stale else "none",
+            "borderRadius": "4px", "padding": "4px 8px" if _stale else "0",
+        },
+    )
+
     return _card([
         _section_title("Consumer GPU Market Share — Steam Hardware Survey (Context Only)"),
+        _as_of_badge,
         html.P(
             "⚠ This panel shows consumer/gaming GPU installed-base share — not enterprise datacenter shipments. "
             "It is included as a vendor market-presence proxy: NVIDIA's dominant gaming share (≈90 %) "
@@ -3462,78 +3898,140 @@ def _sc_steam_panel():
             "enterprise AI GPU shipment volumes require IDC / Mercury Research data.",
             style={"color": SUBTEXT, "fontSize": "11px", "marginTop": "8px"},
         ),
-        _source_footer("Valve / Steam Hardware Survey",
-                       "Monthly survey of ~120M active Steam users. Consumer/gaming data — not enterprise AI GPU shipments."),
+        _source_footer(f"Valve / Steam Hardware Survey — survey month {_as_of}",
+                       "Monthly survey of ~120M active Steam users. Consumer/gaming data — not enterprise "
+                       "AI GPU shipments. Shares are of ALL Steam users (the page's per-DirectX-class "
+                       "tables show shares within a class and are deliberately excluded)."),
     ])
 
 
 # ── SEMI Book-to-Bill (Order Volume) ─────────────────────────────────────────
 
-def _sc_btb_panel():
-    df = sc_btb_query()
+def _sc_demand_panel():
+    """
+    Macro Demand Indicators (BACKLOG SC-06 / SC-00 fix B) — replaces the
+    retired sc_semi_btb panel. Four free, authoritative series in place of the
+    consumer-retail proxies (Newegg/PassMark/Steam) used elsewhere in this tab:
+    TSMC + UMC monthly revenue (live crawl), Korea MOTIE 20-day chip exports,
+    WSTS/SIA global billings, and SEMI WWSEMS quarterly equipment billings —
+    all genuinely published, not modeled (see DEMAND_INDICATOR_META).
+    """
+    df = sc_demand_query()
 
     if df.empty:
         return _card([
-            _section_title("Order Volume — SEMI NA Equipment Book-to-Bill"),
-            html.P("No B2B data. Run: python supply_chain_crawler.py",
+            _section_title("Macro Demand Indicators"),
+            html.P("No demand-indicator data. Run: python supply_chain_crawler.py",
                    style={"color": SUBTEXT, "fontSize": "12px"}),
         ])
 
-    df["btb_ratio"] = pd.to_numeric(df["btb_ratio"], errors="coerce")
-    df = df.sort_values("period")
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    df["yoy_pct"] = pd.to_numeric(df["yoy_pct"], errors="coerce")
 
-    fig = go.Figure()
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=(
+            "TSMC / UMC Monthly Revenue (NT$B)",
+            "Korea Semiconductor Exports, 1st 20 Days (USD B)",
+            "WSTS Global Semiconductor Sales (USD B, 3MMA)",
+            "SEMI WWSEMS Equipment Billings (USD B, Quarterly)",
+        ),
+    )
+
+    _tsmc = df[df["indicator_key"] == "tsmc_revenue"].sort_values("period")
+    _umc  = df[df["indicator_key"] == "umc_revenue"].sort_values("period")
     fig.add_trace(go.Scatter(
-        x=df["period"], y=df["btb_ratio"],
-        mode="lines+markers",
-        line=dict(width=2, color=ACCENT),
-        marker=dict(size=7, color=[
-            GREEN if v >= 1.0 else RED for v in df["btb_ratio"]
-        ]),
-        hovertemplate="<b>%{x}</b><br>B2B Ratio: %{y:.2f}<extra></extra>",
-        name="B2B Ratio",
-    ))
-    fig.add_hline(y=1.0, line_dash="dash", line_color=YELLOW, line_width=1.5,
-                  annotation_text="Neutral (1.00)", annotation_position="right")
-    # Shaded zones
-    fig.add_hrect(y0=1.0, y1=2.0, fillcolor=GREEN, opacity=0.05, line_width=0,
-                  annotation_text="Orders > Billings (Demand expanding)",
-                  annotation_font_size=10, annotation_font_color=GREEN)
-    fig.add_hrect(y0=0.0, y1=1.0, fillcolor=RED, opacity=0.05, line_width=0,
-                  annotation_text="Billings > Orders (Demand contracting)",
-                  annotation_font_size=10, annotation_font_color=RED)
+        x=_tsmc["period"], y=_tsmc["value"], name="TSMC", mode="lines+markers",
+        line=dict(width=2, color="#0071C5"),
+        hovertemplate="<b>TSMC</b> %{x}<br>NT$%{y:.1f}B<extra></extra>",
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=_umc["period"], y=_umc["value"], name="UMC", mode="lines+markers",
+        line=dict(width=2, color="#76b900"),
+        hovertemplate="<b>UMC</b> %{x}<br>NT$%{y:.1f}B<extra></extra>",
+    ), row=1, col=1)
+
+    _kr = df[df["indicator_key"] == "korea_chip_exports_20d"].sort_values("period")
+    fig.add_trace(go.Bar(
+        x=_kr["period"], y=_kr["value"], name="Korea Exports (20d)",
+        marker_color=ACCENT, showlegend=False,
+        hovertemplate="<b>Korea chip exports (1-20)</b> %{x}<br>$%{y:.1f}B<extra></extra>",
+    ), row=1, col=2)
+
+    _wsts = df[df["indicator_key"] == "wsts_billings"].sort_values("period")
+    fig.add_trace(go.Scatter(
+        x=_wsts["period"], y=_wsts["value"], name="WSTS", mode="lines+markers",
+        line=dict(width=2, color=GREEN), showlegend=False,
+        hovertemplate="<b>WSTS</b> %{x}<br>$%{y:.1f}B<extra></extra>",
+    ), row=2, col=1)
+
+    _semi = df[df["indicator_key"] == "semi_wwsems_billings"].sort_values("period")
+    fig.add_trace(go.Bar(
+        x=_semi["period"], y=_semi["value"], name="SEMI WWSEMS",
+        marker_color=YELLOW, showlegend=False,
+        hovertemplate="<b>SEMI WWSEMS</b> %{x}<br>$%{y:.1f}B<extra></extra>",
+    ), row=2, col=2)
+
     fig.update_layout(
         **PLOTLY_TEMPLATE["layout"],
-        title="Order Volume — SEMI North America Equipment Book-to-Bill Ratio",
-        height=320, xaxis_title="Month", yaxis_title="B2B Ratio",
+        title="Macro Demand Indicators", height=620, showlegend=True,
     )
-    fig.update_yaxes(range=[0.7, max(df["btb_ratio"].max() * 1.1, 1.4)])
 
-    # Latest value KPI
-    latest = df.iloc[-1]
-    kpi_color = GREEN if latest["btb_ratio"] >= 1.0 else RED
-    kpi = _kpi(
-        f"Latest B2B  ({latest['period']})",
-        f"{latest['btb_ratio']:.2f}",
-        "Orders > Billings" if latest["btb_ratio"] >= 1 else "Billings > Orders",
-        kpi_color,
+    # ── Latest-value summary table ────────────────────────────────────────
+    rows_tbl = []
+    for key, grp in df.groupby("indicator_key"):
+        latest = grp.sort_values("period").iloc[-1]
+        meta = DEMAND_INDICATOR_META.get(key, {})
+        rows_tbl.append({
+            "Indicator": meta.get("label", key),
+            "Period": latest["period"],
+            "Value": f"{latest['value']:.2f} {latest['unit']}" if pd.notna(latest["value"]) else "—",
+            "YoY Δ": f"{latest['yoy_pct']:+.1f}%" if pd.notna(latest["yoy_pct"]) else "—",
+            "Seq Δ": f"{latest['seq_pct']:+.1f}%" if pd.notna(latest["seq_pct"]) else "—",
+            "Source": latest["source"],
+        })
+    tbl_df = pd.DataFrame(rows_tbl)
+    tbl = dash_table.DataTable(
+        data=tbl_df.to_dict("records"),
+        columns=[{"name": c, "id": c} for c in tbl_df.columns],
+        style_table={"overflowX": "auto"},
+        style_cell={"backgroundColor": BG3, "color": TEXT, "border": "1px solid #30363d",
+                    "fontSize": "13px", "padding": "6px 10px"},
+        style_header={"backgroundColor": BG2, "color": ACCENT, "fontWeight": "600",
+                      "border": "1px solid #30363d"},
+        style_data_conditional=[
+            {"if": {"filter_query": '{YoY Δ} contains "+"', "column_id": "YoY Δ"},
+             "color": GREEN, "fontWeight": "600"},
+            {"if": {"filter_query": '{YoY Δ} contains "-"', "column_id": "YoY Δ"},
+             "color": RED, "fontWeight": "600"},
+            {"if": {"row_index": "odd"}, "backgroundColor": BG2},
+        ],
     )
 
     return _card([
-        _section_title("Order Volume — SEMI NA Equipment Book-to-Bill"),
-        dbc.Row([
-            dbc.Col(_card(kpi, style={"textAlign": "center"}), width=2),
-            dbc.Col(dcc.Graph(figure=fig, config={"displayModeBar": True}), width=10),
-        ]),
+        _section_title("Macro Demand Indicators"),
         html.P(
-            "SEMI NA Equipment B2B > 1.0 indicates semiconductor equipment orders are outpacing billings — "
-            "a leading indicator that fabs are investing in capacity expansion. "
-            "Typically leads fab utilisation by 6–18 months.",
-            style={"color": SUBTEXT, "fontSize": "11px", "marginTop": "8px"},
+            "Four free, authoritative demand series in place of consumer-retail proxies: "
+            "TSMC + UMC monthly revenue (real-time foundry signal, live crawl), Korea MOTIE "
+            "1st-20-days chip exports (~3-week leading indicator), WSTS/SIA global "
+            "semiconductor billings (industry-standard demand series), and SEMI WWSEMS "
+            "quarterly equipment billings (capex cycle — replaces the retired B2B panel, "
+            "BACKLOG SC-00).",
+            style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "8px"},
         ),
-        _source_footer("SEMI (Semiconductor Equipment & Materials International)",
-                       "North America Equipment Book-to-Bill Report. Published monthly. "
-                       "Update CURATED_SEMI_BTB in products_config.py each month."),
+        dcc.Graph(figure=fig, config={"displayModeBar": True}),
+        html.Div(style={"marginTop": "12px"}),
+        tbl,
+        _source_footer(
+            "TSMC IR · UMC IR · Korea MOTIE/KITA · WSTS/SIA · SEMI WWSEMS",
+            "TSMC/UMC monthly revenue: live crawl of each company's IR page, falls back to "
+            "the curated seed on a fetch/parse failure. Korea chip exports, WSTS billings, "
+            "and SEMI WWSEMS billings: curated from each source's press release — no stable "
+            "per-period table exists to crawl (WSTS's monthly data sits behind a members-only "
+            "portal; Korea MOTIE and SEMI publish one-off articles, not an archive page). "
+            "Update CURATED_DEMAND_INDICATORS in products_config.py as each source releases "
+            "new data.",
+        ),
     ])
 
 
@@ -3622,23 +4120,51 @@ def _sc_capacity_panel():
         ))
 
     # ── Capacity bar chart (wafers per month) ─────────────────────────────
+    # NOTE: each company/segment reports on its own schedule, so the "latest"
+    # row is NOT the same quarter for every bar. The reporting period is
+    # therefore stamped on each bar (x-label + text + hover) and the title
+    # states the actual span — never claim a single common quarter.
     fig_cap = go.Figure()
     latest_cap = df.sort_values("period").groupby(["company", "product_type"]).last().reset_index()
+    latest_cap["x_label"] = (
+        latest_cap["product_type"].astype(str)
+        + "<br><span style='font-size:9px;color:" + SUBTEXT + "'>"
+        + latest_cap["period"].astype(str) + "</span>"
+    )
+    periods = sorted(p for p in latest_cap["period"].dropna().astype(str).unique())
+    if not periods:
+        period_span = "period not reported"
+    elif len(periods) == 1:
+        period_span = f"as of {periods[0]}"
+    else:
+        period_span = f"latest reported per segment · {periods[0]} – {periods[-1]}"
+
     for company in COMPANIES:
         sub = latest_cap[latest_cap["company"] == company]
         if sub.empty:
             continue
         fig_cap.add_trace(go.Bar(
             name=company,
-            x=sub["product_type"],
+            x=sub["x_label"],
             y=sub["capacity_kwpm"],
+            customdata=sub[["product_type", "period", "source"]].values,
+            text=sub["period"],
+            textposition="outside",
+            textfont=dict(size=9, color=SUBTEXT),
+            cliponaxis=False,
             marker_color=CO_COLORS.get(company, ACCENT),
-            hovertemplate=f"<b>{company}</b><br>%{{x}}<br>Capacity: %{{y:.0f}}k wpm<extra></extra>",
+            hovertemplate=(
+                f"<b>{company}</b><br>%{{customdata[0]}}<br>"
+                "Capacity: %{y:.0f}k wpm<br>"
+                "Reporting period: %{customdata[1]}<br>"
+                "Source: %{customdata[2]}<extra></extra>"
+            ),
         ))
     fig_cap.update_layout(
         **PLOTLY_TEMPLATE["layout"],
-        title="Manufacturer Capacity — Latest Quarter (1,000s of 300mm-eq wafers/month)",
-        height=320, barmode="group", xaxis_title="Segment",
+        title=("Manufacturer Capacity (1,000s of 300mm-eq wafers/month)"
+               f"<br><span style='font-size:10px;color:{SUBTEXT}'>{period_span}</span>"),
+        height=360, barmode="group", xaxis_title="Segment (reporting period)",
         yaxis_title="Capacity (k wpm)",
     )
     fig_cap.update_xaxes(tickangle=-20)
@@ -3674,7 +4200,14 @@ def _sc_capacity_panel():
         ]),
         dbc.Row([
             dbc.Col(_card(dcc.Graph(figure=fig_util, config={"displayModeBar": True})), width=7),
-            dbc.Col(_card(dcc.Graph(figure=fig_cap,  config={"displayModeBar": False})), width=5),
+            dbc.Col(_card([
+                dcc.Graph(figure=fig_cap, config={"displayModeBar": False}),
+                _source_footer(
+                    "TSMC / Samsung / SK Hynix / Micron / Intel — Quarterly Earnings Transcripts",
+                    f"Capacity shown is each segment's latest reported quarter ({period_span}); "
+                    "bars are not all the same period.",
+                ),
+            ]), width=5),
         ]),
         _card([
             _section_title("Capacity Detail (from Earnings Calls)"),
@@ -3776,9 +4309,11 @@ def _sc_dram_panel():
         html.Div(style={"marginTop": "12px"}),
         _section_title("Latest Prices & Year-on-Year Change"),
         tbl,
-        _source_footer("TrendForce / DRAMeXchange",
-                       "DDR4 8Gb 1Gx8 & DDR5 16Gb 2Gx8: weekly spot benchmark die price (USD/die). "
-                       "HBM3E 12-Hi: estimated contract price per GB of stack capacity (USD/GB). "
+        _source_footer(f"{SRC_PUBLISHED} (DDR4/DDR5) / {SRC_MODELED} (HBM3E)",
+                       "DDR4 8Gb 1Gx8 & DDR5 16Gb 2Gx8: weekly spot benchmark die price (USD/die), "
+                       "transcribed from TrendForce/DRAMeXchange's free public release. "
+                       "HBM3E 12-Hi: contract price per GB (USD/GB) — never publicly quoted, "
+                       "so this project's own modeled estimate. "
                        "Update CURATED_DRAM_SPOT in products_config.py monthly."),
     ])
 
@@ -3831,6 +4366,7 @@ _EXPORT_SHEET_NAMES = {
     "sc_semi_btb":          "SC Book-to-Bill",
     "sc_dram_spot":         "SC DRAM Spot",
     "sc_capacity":          "SC Fab Capacity",
+    "sc_demand_indicators": "SC Demand Indicators",
     "options_iv":           "Options IV",
     "options_iv_history":   "Options IV History",
 }
@@ -4008,6 +4544,7 @@ def db_stats():
         "cycle_analysis", "company_info", "crawl_runs",
         "sc_prices", "sc_market_share", "sc_semi_btb",
         "sc_dram_spot", "sc_capacity", "options_iv",
+        "sc_demand_indicators",
     ]
     stats = {
         "volume_ok":     VOLUME_OK,
@@ -4035,6 +4572,19 @@ def db_stats():
         conn.close()
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+    # ── Freshness (BACKLOG SC-03) ─────────────────────────────────────────────
+    # Row counts above are kept for backward compatibility, but they cannot tell
+    # a live source from a dead one. These fields can.
+    try:
+        report = _freshness_report()
+        stale  = _stale_sources(report)
+        stats["freshness"]     = report
+        stats["stale_sources"] = stale
+        stats["stale_count"]   = len(stale)
+        stats["data_ok"]       = (len(stale) == 0)
+    except Exception as e:
+        stats["freshness"] = {"error": str(e)}
 
     return jsonify(stats), 200
 
