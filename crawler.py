@@ -16,6 +16,7 @@ import sqlite3
 import time
 from datetime import datetime
 from config import now_hkt as _now_hkt   # UTC+8 timestamp helper
+from job_heartbeat import start_job, finish_job   # QA F-01 — run heartbeats
 
 import numpy as np
 import pandas as pd
@@ -121,6 +122,34 @@ def init_db(conn: sqlite3.Connection) -> None:
             perf_5d                 REAL,
             perf_10d                REAL,
             perf_1m                 REAL,
+            PRIMARY KEY (ticker, snapshot_date)
+        );
+
+        -- Point-in-time valuation snapshot (one row per ticker per crawl date).
+        --
+        -- WHY THIS TABLE EXISTS (QA finding F-02, 2026-08-02): these three
+        -- figures come from yf.Ticker().info, which is a SNAPSHOT of *today* —
+        -- there is no historical equivalent in the free feed. They were
+        -- previously written into every historical quarterly_financials row,
+        -- which made P/E and market-cap history a flat line at today's value.
+        --
+        -- A snapshot belongs in a table keyed by the date it was OBSERVED, not
+        -- by the fiscal period it is being attached to. Unlike option chains
+        -- (see CLAUDE.md §11 / IV-03) a valuation snapshot CAN legitimately
+        -- accumulate: every crawl appends one honest observation, so a genuine
+        -- P/E series builds forward from the day this shipped. It cannot be
+        -- backfilled — do not try. An empty history that says why is honest.
+        CREATE TABLE IF NOT EXISTS ticker_valuation_history (
+            ticker              TEXT    NOT NULL,
+            snapshot_date       TEXT    NOT NULL,
+            trailing_pe         REAL,
+            forward_pe          REAL,
+            trailing_eps        REAL,
+            market_cap          REAL,
+            shares_outstanding  REAL,
+            price_to_book       REAL,
+            close_price         REAL,
+            source              TEXT,
             PRIMARY KEY (ticker, snapshot_date)
         );
 
@@ -277,6 +306,13 @@ def fetch_and_store_financials(
         except Exception:
             balance = pd.DataFrame()
 
+        # Store the point-in-time valuation snapshot BEFORE the early exit
+        # below: ETFs, crypto and macro tickers have no quarterly income
+        # statement but do have a market cap / price, and returning first would
+        # silently exclude them. Reuses the `info` already fetched above — this
+        # adds no extra network call.
+        store_valuation_snapshot(conn, display_name, info)
+
         if income.empty:
             log.info("  financials: no quarterly income data for %s", display_name)
             return
@@ -306,12 +342,25 @@ def fetch_and_store_financials(
             cogs      = _safe(revenue - gp)        if revenue and gp  else None
             inv_turn  = _safe(cogs / inv)          if cogs and inv    else None
 
+            # ── QA F-02: eps / pe_ratio / market_cap are deliberately NOT
+            # sourced from `info` here. `info` is a single snapshot of TODAY,
+            # fetched once above; writing it into every historical quarter made
+            # P/E and market-cap history a flat line at today's value, and the
+            # `eps or trailingEps` fallback injected a TRAILING-TWELVE-MONTH
+            # figure into a single quarter's row (~4x overstatement).
+            #
+            # `eps` now carries the quarter's own Diluted EPS or NULL. pe_ratio
+            # and market_cap are always NULL — they have no point-in-time value
+            # in the free feed and are therefore unknowable for a past quarter.
+            # The snapshot lives in ticker_valuation_history, keyed by the date
+            # it was observed. Columns retained (not dropped) per Hard Rule 2:
+            # dashboard.py and /api/export-xlsx read this shape by name.
             records.append((
                 display_name, period_end,
                 revenue, gp, gm, op, op_margin, rd, rd_ratio, net, net_margin,
-                eps or _safe(info.get("trailingEps")),
-                _safe(info.get("trailingPE")),
-                _safe(info.get("marketCap")),
+                eps,        # quarterly Diluted EPS only — never the TTM fallback
+                None,       # pe_ratio    — see ticker_valuation_history
+                None,       # market_cap  — see ticker_valuation_history
                 ar, ar_turn, inv, inv_turn,
             ))
 
@@ -324,6 +373,110 @@ def fetch_and_store_financials(
 
     except Exception as exc:
         log.warning("  financials failed for %s: %s", yf_symbol, exc)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POINT-IN-TIME VALUATION SNAPSHOT  (QA finding F-02)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _last_price_date(conn: sqlite3.Connection, display_name: str) -> str:
+    """
+    Newest date in daily_prices for this ticker, else today (UTC+8).
+
+    Keying the snapshot on the last TRADING date rather than the wall-clock
+    crawl date makes the write idempotent across weekend/holiday runs: a
+    Saturday and a Sunday crawl both describe Friday's close, so they collapse
+    onto one row via INSERT OR REPLACE instead of creating two rows that claim
+    to be independent observations of a market that was shut.
+    """
+    try:
+        row = conn.execute(
+            "SELECT MAX(date) FROM daily_prices WHERE ticker = ?", (display_name,)
+        ).fetchone()
+        if row and row[0]:
+            return row[0]
+    except Exception:
+        pass
+    return _now_hkt().strftime("%Y-%m-%d")
+
+
+def store_valuation_snapshot(
+    conn: sqlite3.Connection,
+    display_name: str,
+    info: dict,
+) -> None:
+    """
+    Append one observed valuation snapshot for this ticker.
+
+    Every figure here is a property of the OBSERVATION DATE, never of a fiscal
+    period. Do not join this table to quarterly_financials.period_end and do
+    not backfill it — the free feed exposes no historical trailing P/E, and
+    fabricating one is exactly the defect (F-02) this table was created to
+    undo. The series is empty on day one and fills forward, one row per crawl.
+    """
+    try:
+        snapshot_date = _last_price_date(conn, display_name)
+        row = (
+            display_name,
+            snapshot_date,
+            _safe(info.get("trailingPE")),
+            _safe(info.get("forwardPE")),
+            _safe(info.get("trailingEps")),
+            _safe(info.get("marketCap")),
+            _safe(info.get("sharesOutstanding")),
+            _safe(info.get("priceToBook")),
+            _safe(info.get("currentPrice") or info.get("regularMarketPreviousClose")),
+            "yfinance .info snapshot (observed, not point-in-time history)",
+        )
+        # Nothing resolved => write nothing. A row of all-NULLs is the SC-01
+        # failure shape: it inflates COUNT(*) and reads as a healthy crawl.
+        if all(v is None for v in row[2:9]):
+            log.info("  valuation : no snapshot fields resolved for %s; row skipped",
+                     display_name)
+            return
+
+        conn.execute(
+            "INSERT OR REPLACE INTO ticker_valuation_history VALUES (?,?,?,?,?,?,?,?,?,?)",
+            row,
+        )
+        conn.commit()
+        log.info("  valuation : snapshot stored for %s @ %s (P/E=%s, cap=%s)",
+                 display_name, snapshot_date,
+                 f"{row[2]:.1f}" if row[2] else "n/a",
+                 f"{row[5]/1e9:.1f}B" if row[5] else "n/a")
+    except Exception as exc:
+        log.warning("  valuation failed for %s: %s", display_name, exc)
+
+
+def purge_contaminated_valuation_cols(conn: sqlite3.Connection) -> None:
+    """
+    NULL out quarterly_financials.pe_ratio / market_cap wherever they still
+    hold a snapshot value (QA finding F-02). Idempotent, zero network — safe to
+    run on every deploy, mirroring purge_null_price_rows() (BACKLOG SC-01).
+
+    This exists because the fixed crawler alone does not clean production: the
+    full crawl is gated behind a row-count check in startup.sh and an external
+    schedule, so contaminated rows written months ago would otherwise survive
+    indefinitely on the Railway volume. Same lesson as SC-14 — a correction
+    that only lives in the writer never reaches rows already on disk.
+
+    Deletes nothing and touches no other column: a wrong number is worse than
+    no number (CLAUDE.md §8), but the surrounding revenue/margin figures in
+    these rows are genuine and must survive.
+    """
+    try:
+        cur = conn.execute("""
+            UPDATE quarterly_financials
+            SET pe_ratio = NULL, market_cap = NULL
+            WHERE pe_ratio IS NOT NULL OR market_cap IS NOT NULL
+        """)
+        conn.commit()
+        if cur.rowcount:
+            log.info("Purged snapshot contamination from %d quarterly_financials "
+                     "row(s) — see ticker_valuation_history (F-02).", cur.rowcount)
+    except sqlite3.OperationalError as exc:
+        # Table may not exist yet on a brand-new DB — not an error.
+        log.info("purge_contaminated_valuation_cols skipped: %s", exc)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -511,12 +664,13 @@ def crawl(tickers=None, fetch_iv: bool = True) -> None:
 
     conn = sqlite3.connect(DB_PATH)
     init_db(conn)
+    purge_contaminated_valuation_cols(conn)   # F-02 — idempotent, see startup.sh
 
-    run_id = conn.execute(
-        "INSERT INTO crawl_runs (started_at, tickers_attempted) VALUES (?, ?)",
-        (_now_hkt().isoformat(), len(tickers)),
-    ).lastrowid
-    conn.commit()
+    # Heartbeat (QA F-01): records that the MARKET job ran, which is what the
+    # scheduler and /health both key on. Written via the shared helper so the
+    # `job` column is populated — a bare INSERT here would default to 'market'
+    # and work by accident, which is not the same as working on purpose.
+    run_id = start_job(conn, "market", attempted=len(tickers))
 
     ok_count = 0
     total    = len(tickers)
@@ -543,13 +697,16 @@ def crawl(tickers=None, fetch_iv: bool = True) -> None:
         ok_count += 1
         time.sleep(REQUEST_DELAY_SECONDS)
 
-    # Finalise run record
-    conn.execute("""
-        UPDATE crawl_runs
-        SET finished_at = ?, status = 'completed', tickers_ok = ?
-        WHERE id = ?
-    """, (_now_hkt().isoformat(), ok_count, run_id))
-    conn.commit()
+    # Finalise run record. A run that resolved fewer than half its tickers is
+    # recorded as FAILED, not completed: a heartbeat that goes green on a
+    # degraded run certifies the outage instead of reporting it (F-01).
+    _ok = ok_count >= max(1, total // 2)
+    finish_job(
+        conn, run_id,
+        status="completed" if _ok else "failed",
+        ok=ok_count,
+        note=f"{ok_count}/{total} tickers resolved",
+    )
     conn.close()
 
     log.info("✅  Crawl complete — %d/%d tickers OK. Data saved to %s", ok_count, total, DB_PATH)
@@ -569,7 +726,20 @@ if __name__ == "__main__":
         "--quick", action="store_true",
         help="Skip options implied-volatility fetch (much faster)",
     )
+    parser.add_argument(
+        "--purge-only", action="store_true",
+        help="Run idempotent data-integrity purges only (no network calls). "
+             "Used by startup.sh on every deploy — see F-02.",
+    )
     args = parser.parse_args()
+
+    if args.purge_only:
+        _conn = sqlite3.connect(DB_PATH)
+        init_db(_conn)
+        purge_contaminated_valuation_cols(_conn)
+        _conn.close()
+        log.info("✅  Purge-only pass complete — no network calls made.")
+        raise SystemExit(0)
 
     if args.tickers:
         selected = {k: v for k, v in TICKER_MAP.items() if k in args.tickers}

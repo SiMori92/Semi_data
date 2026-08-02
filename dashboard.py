@@ -34,6 +34,7 @@ from products_config import (
 
 # IBKR integration (optional — graceful if not installed / not enabled)
 from ibkr_options_crawler import ibkr_is_enabled, init_ibkr_tables
+from job_heartbeat import job_report, overdue_jobs, scheduler_enabled   # QA F-01
 
 from config import (
     DB_PATH,
@@ -142,6 +143,10 @@ _FRESHNESS_SPEC = {
     "cycle_analysis":       ("snapshot_date", "date",      4),
     "quarterly_financials": ("period_end",    "date",    120),
     "options_iv":           ("snapshot_date", "date",      4),
+    # Written once per ticker per crawl, keyed to the last trading date — so it
+    # tracks daily_prices exactly and shares its 4-day SLA. If this goes stale
+    # while daily_prices does not, the crawl is running but .info is failing.
+    "ticker_valuation_history": ("snapshot_date", "date",  4),
     # sc_dram_spot is intentionally ABSENT: it is reported per product_type via
     # _SC_DRAM_SLA below. A table-level entry would let one fresh series certify
     # the whole table (BACKLOG SC-08) — see the comment there.
@@ -154,7 +159,10 @@ _FRESHNESS_SPEC = {
     # months). Two surfaces disagreeing about the same table is how a real
     # signal gets ignored.
     "sc_market_share":      ("period",        "month",   120),
-    "sc_capacity":          ("period",        "quarter", 150),
+    # sc_fab_metrics: quarterly company disclosures. 150d because TSMC files
+    # ~Q+20d but the hand-transcribed Management Report rows lag further
+    # (SC-11); tighten once the live crawler is the only writer.
+    "sc_fab_metrics":       ("period",        "quarter", 150),
 }
 
 # sc_prices mixes live scrapes and curated history in one table under different
@@ -168,6 +176,15 @@ _SC_PRICE_SLA = {"newegg": 7, "passmark": 7, "curated": 45}
 _SC_DEMAND_SLA = {
     "tsmc_revenue":           40,   # monthly, published ~10th
     "umc_revenue":            40,
+    # Nanya files monthly like TSMC/UMC, but its ENGLISH IR page lags: on
+    # 2026-08-02 it carried Jan–May while TSMC and UMC already showed June
+    # (confirmed by its own accumulated-revenue total, which sums Jan–May exactly,
+    # so this is publication lag and not a parse gap). Calibrated to that observed
+    # lag rather than to the statutory filing date — an SLA set to what we WISH
+    # the lag were fires on day one and trains the reader to ignore the badge
+    # (SC-04). Tighten to 40 once the live crawler has two or three months of real
+    # evidence about this page's actual cadence; do not guess it lower now.
+    "nanya_revenue":          70,
     "korea_chip_exports_20d": 20,   # ~3x/month
     # SLAs are calibrated to each publisher's ACTUAL lag, not to how recent we
     # would like the data to be. A badge that fires while the publisher simply
@@ -297,6 +314,211 @@ def _freshness_report() -> dict:
     return report
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# CROSS-SOURCE CONSISTENCY (BACKLOG SC-12)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# _freshness_report() answers "is each source still producing?". It cannot answer
+# "is what it produced believable?", and every data bug found in this project so
+# far was of the second kind:
+#
+#   SC-01  Newegg wrote a row per product per day, every price NULL
+#   SC-02  Steam survey frozen 17 months, panel looked normal
+#   SC-04  34 DDR rows decayed 1-2%/month for 17 months, ~18x off the real market
+#   SC-09  HBM3E rose exactly +$0.20 every 2 months for 15 steps
+#   SC-00  41 rows of an indicator discontinued in 2016
+#
+# Each was found by a human reading the numbers, never by the system. Worse, on
+# 2026-08-02 the DB simultaneously held WSTS billings at +104% YoY and a DRAM spot
+# series flat since 2024-12 — mutually impossible, both individually "healthy",
+# no warning anywhere.
+#
+# These rules are ADVISORY: they flag, they never delete. A flag is a prompt to go
+# look, not a verdict — real series do occasionally sit flat or move linearly.
+_CONSISTENCY_SPEC = {
+    # label            table                  series key       period    value            source
+    "sc_dram_spot":   ("sc_dram_spot",        "product_type",  "period", "price_usd",      "source"),
+    "sc_market_share":("sc_market_share",     "model_name",    "period", "share_pct",      "source"),
+    "sc_demand":      ("sc_demand_indicators","indicator_key", "period", "value",          "source"),
+    "sc_fab_metrics": ("sc_fab_metrics",      "company",       "period", "value",          "source"),
+    "sc_prices":      ("sc_prices",           "model_id",      "date",   "price_usd",      "source"),
+    # ── Equity fundamentals (QA finding F-02, added 2026-08-02) ───────────────
+    # These two entries exist because the shape checks were pointed only at the
+    # supply-chain tables while quarterly_financials carried a textbook `frozen`
+    # series: a snapshot P/E and market cap replicated into every historical
+    # quarter. The rule that would have caught it on day one was already
+    # written — it was simply never aimed here.
+    #
+    # The crawler now writes NULL to pe_ratio/market_cap, so the first entry
+    # normally checks nothing. That is the point: it is a REGRESSION TRIP-WIRE.
+    # If anyone re-points these columns at yf.Ticker().info, the frozen rule
+    # fires at `high` severity on the next /api/db-stats call.
+    #
+    # KNOWN LIMIT — state it rather than overclaim: the frozen rule needs
+    # _FLAT_MIN_POINTS (6) identical values, and yfinance returns only ~5
+    # quarters per call. On a freshly-seeded DB this trip-wire is therefore
+    # ARMED BUT NOT YET ABLE TO FIRE. quarterly_financials accumulates across
+    # crawls (INSERT OR REPLACE never deletes older quarters), so it becomes
+    # effective once a ticker holds 6+ quarters — roughly two quarters of
+    # running. It is a guard against reintroduction over time, not a detector
+    # that would have caught the original F-02 on day one.
+    #
+    # quarterly_financials has no source column, so a literal is passed. It
+    # deliberately does not contain "modeled"/"curated"/"estimate", which means
+    # _shape_severity() rates any flag here HIGH — correct, because a vendor
+    # fundamentals feed claiming a frozen series is a defect, not a disclosure.
+    "fin_valuation":  ("quarterly_financials", "ticker",       "period_end", "pe_ratio", "'yfinance (vendor feed)'"),
+    "fin_revenue":    ("quarterly_financials", "ticker",       "period_end", "revenue",  "'yfinance (vendor feed)'"),
+}
+
+# Severity depends on what the series CLAIMS to be, not just on its shape.
+#
+# A series labelled as a modeled estimate having a modeled shape is self-
+# consistent — disclosed, and the reader was told. A series claiming a publisher
+# while showing a fabricated shape is the actual defect: that is precisely SC-04,
+# where 34 hand-extrapolated rows carried the label "TrendForce (public release)".
+#
+# Without this split the badge fires ~24 times on day one from the curated retail
+# price curves (all correctly labelled SRC_MODELED) and becomes noise — the same
+# way an over-tight SLA trains a reader to ignore an alert (SC-04 calibration).
+# "expected" flags are still reported in /api/db-stats; they just don't alarm.
+_MODELED_MARKERS = ("modeled", "modelled", "estimate", "curated")
+
+
+def _shape_severity(source: str) -> str:
+    s = (source or "").lower()
+    return "expected" if any(m in s for m in _MODELED_MARKERS) else "high"
+
+_FLAT_MIN_POINTS     = 6      # identical values in a row before it is suspicious
+_GLIDE_MIN_STEPS     = 5      # equal first-differences in a row
+_GLIDE_REL_TOL       = 0.01   # "equal" within 1%
+_DIVERGE_YOY_PCT     = 20.0   # |WSTS YoY| above this = the market is definitely moving
+
+
+def _consistency_report() -> dict:
+    """
+    Shape-based plausibility checks across every curated/scraped series.
+
+    Returns {"flags": [...], "checked": n, "ok": bool}. Never raises — a broken
+    check must not take down /api/db-stats (same contract as _freshness_report).
+    """
+    flags = []
+    checked = 0
+
+    try:
+        # ── Context: is the market actually moving? Used by the divergence rule.
+        wsts_yoy = None
+        try:
+            w = query(
+                "SELECT value, period FROM sc_demand_indicators "
+                "WHERE indicator_key='wsts_billings' AND value IS NOT NULL "
+                "ORDER BY period"
+            )
+            if len(w) >= 2:
+                first, last = float(w["value"].iloc[0]), float(w["value"].iloc[-1])
+                if first > 0:
+                    wsts_yoy = (last / first - 1) * 100
+        except Exception:
+            pass
+
+        for label, (table, key_col, per_col, val_col, src_col) in _CONSISTENCY_SPEC.items():
+            try:
+                df = query(
+                    f"SELECT {key_col} AS k, {per_col} AS p, {val_col} AS v, "
+                    f"{src_col} AS s FROM {table} "
+                    f"WHERE {val_col} IS NOT NULL ORDER BY k, p"
+                )
+            except Exception:
+                continue                      # table absent on an older DB
+            if df.empty:
+                continue
+
+            for key, grp in df.groupby("k"):
+                vals = [float(x) for x in grp["v"].tolist()]
+                pers = [str(x) for x in grp["p"].tolist()]
+                if len(vals) < 3:
+                    continue
+                checked += 1
+                sid = f"{label}[{key}]"
+                srcs = [str(x) for x in grp["s"].tolist() if x is not None]
+                sev  = _shape_severity(max(set(srcs), key=srcs.count) if srcs else "")
+
+                def flag(rule, detail, _sid=sid, _sev=sev):
+                    flags.append({"series": _sid, "rule": rule,
+                                  "detail": detail, "severity": _sev})
+
+                # RULE 1 — frozen. A live series that stopped moving while still
+                # being written. (SC-02: Steam shares identical period after
+                # period.) Distinct from staleness: this one keeps producing.
+                tail = vals[-_FLAT_MIN_POINTS:]
+                if len(tail) >= _FLAT_MIN_POINTS and len(set(tail)) == 1:
+                    msg = (f"{len(tail)} consecutive identical values ({tail[-1]:g}) "
+                           f"through {pers[-1]}")
+                    if wsts_yoy is not None and abs(wsts_yoy) > _DIVERGE_YOY_PCT:
+                        msg += f" while WSTS billings moved {wsts_yoy:+.0f}%"
+                    flag("frozen", msg)
+
+                # RULE 2 — synthetic glide. The fingerprint shared by SC-04's
+                # falsified DDR rows and SC-09's modeled HBM series: a real spot
+                # or contract price does not step by a constant amount for months.
+                diffs = [b - a for a, b in zip(vals, vals[1:])]
+                run, best, best_at = 1, 1, len(diffs) - 1
+                for i in range(1, len(diffs)):
+                    prev, cur = diffs[i - 1], diffs[i]
+                    same = (abs(cur - prev) <= _GLIDE_REL_TOL * max(abs(prev), 1e-9))
+                    run = run + 1 if same else 1
+                    if run > best:
+                        best, best_at = run, i
+                if best >= _GLIDE_MIN_STEPS and abs(diffs[best_at]) > 0:
+                    flag("synthetic_glide",
+                         f"{best} consecutive steps of ~{diffs[best_at]:+g} "
+                         f"(<{_GLIDE_REL_TOL:.0%} variation) ending {pers[best_at + 1]}")
+
+                # RULE 2b — geometric glide. SC-04's rows fell a constant ~1.5%
+                # every month, so their absolute steps kept shrinking and Rule 2
+                # (constant difference) missed them entirely — only the WSTS
+                # divergence rule caught that series. A constant RATIO is the
+                # other half of the same fingerprint, and unlike Rule 3 it needs
+                # no demand-layer context, so it still works if WSTS goes quiet.
+                ratios = [b / a for a, b in zip(vals, vals[1:]) if a not in (0,)]
+                if len(ratios) >= _GLIDE_MIN_STEPS:
+                    rrun, rbest, rat = 1, 1, len(ratios) - 1
+                    for i in range(1, len(ratios)):
+                        same = abs(ratios[i] - ratios[i - 1]) <= _GLIDE_REL_TOL * abs(ratios[i - 1])
+                        rrun = rrun + 1 if same else 1
+                        if rrun > rbest:
+                            rbest, rat = rrun, i
+                    if rbest >= _GLIDE_MIN_STEPS and abs(ratios[rat] - 1.0) > 1e-6:
+                        flag("geometric_glide",
+                             f"{rbest} consecutive steps of ~{(ratios[rat] - 1) * 100:+.2f}% "
+                             f"(<{_GLIDE_REL_TOL:.0%} variation) ending {pers[rat + 1]}")
+
+                # RULE 3 — monotonic decay. SC-04's rows fell every single month
+                # for 17 months. Direction alone is weak evidence, so this only
+                # fires when the demand layer says the market went the other way.
+                if (wsts_yoy is not None and wsts_yoy > _DIVERGE_YOY_PCT
+                        and len(diffs) >= _FLAT_MIN_POINTS
+                        and all(d < 0 for d in diffs[-_FLAT_MIN_POINTS:])):
+                    flag("divergence",
+                         f"fell for {_FLAT_MIN_POINTS} consecutive periods to "
+                         f"{vals[-1]:g} ({pers[-1]}) while WSTS billings "
+                         f"moved {wsts_yoy:+.0f}%")
+    except Exception as exc:                  # never take down /api/db-stats
+        return {"flags": [], "checked": 0, "ok": True, "error": str(exc)}
+
+    flags.sort(key=lambda f: (f.get("severity") != "high", f["rule"], f["series"]))
+    high = [f for f in flags if f.get("severity") == "high"]
+    return {
+        "flags":    flags,
+        "high":     len(high),
+        "expected": len(flags) - len(high),
+        "checked":  checked,
+        # `ok` tracks HIGH only — an "expected" flag is a disclosed modeled series,
+        # which is not a defect and must not make the dashboard look broken.
+        "ok":       not high,
+    }
+
+
 def _stale_sources(report: dict = None) -> list:
     """
     Sources breaching their SLA *or* returning mostly-empty rows, worst first.
@@ -345,6 +567,38 @@ def financials_data(tickers: list[str]) -> pd.DataFrame:
         f"SELECT * FROM quarterly_financials WHERE ticker IN ({placeholders}) ORDER BY ticker,period_end",
         tickers,
     )
+
+
+def valuation_snapshot_data(tickers: list[str]) -> pd.DataFrame:
+    """
+    Latest observed valuation snapshot per ticker from ticker_valuation_history.
+
+    Deliberately separate from financials_data(): these figures describe the
+    date they were OBSERVED, not a fiscal period. Joining them onto a quarter is
+    the F-02 defect. Returns empty (not an error) on a DB predating the table —
+    the panel renders an explanatory blank rather than failing.
+    """
+    if not tickers:
+        return pd.DataFrame()
+    placeholders = ",".join("?" * len(tickers))
+    try:
+        return query(
+            f"""
+            SELECT v.*
+            FROM ticker_valuation_history v
+            JOIN (
+                SELECT ticker, MAX(snapshot_date) AS md
+                FROM ticker_valuation_history
+                WHERE ticker IN ({placeholders})
+                GROUP BY ticker
+            ) latest
+              ON v.ticker = latest.ticker AND v.snapshot_date = latest.md
+            ORDER BY v.ticker
+            """,
+            tickers,
+        )
+    except Exception:
+        return pd.DataFrame()
 
 
 def sentiment_data(tickers: list[str]) -> pd.DataFrame:
@@ -622,6 +876,12 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
                 }),
                 # ── Data-freshness badge (BACKLOG SC-03) ───────────────────
                 html.Span(id="data-freshness-badge", style={"marginLeft": "20px"}),
+                # ── Crawl-schedule badge (QA F-01) ─────────────────────────
+                # Deliberately SEPARATE from the freshness chip beside it. That
+                # one answers "is the data current?", this one answers "are we
+                # still crawling?" — different causes, different fixes, and a
+                # publisher going quiet must not look like our scheduler dying.
+                html.Span(id="crawl-status-badge", style={"marginLeft": "10px"}),
                 # ── IBKR connection badge ──────────────────────────────────
                 html.Span(id="ibkr-status-badge", style={"marginLeft": "10px"}),
                 dbc.Button("🔄 Reload Charts", id="btn-refresh", color="primary",
@@ -841,6 +1101,56 @@ _crawl_running: dict = {"active": False}
 
 
 @app.callback(
+    Output("crawl-status-badge", "children"),
+    Input("status-interval", "n_intervals"),
+)
+def update_crawl_badge(_):
+    """
+    Navbar chip reporting whether the crawlers are still running (QA F-01).
+
+    Reads the same job_report() the scheduler uses to decide what to run, so
+    the badge and the schedule cannot drift apart — the rule already learned for
+    _stale_sources() (§6.5) and _iv_source_meta() (§9 IV-01).
+
+    Same navbar-level Output / status-interval pattern as the two chips beside
+    it; never nested inside tab-content (§7 rules 3 & 4).
+    """
+    def _chip(icon, text, colour, tip):
+        return html.Span(
+            [html.Span(icon, style={"marginRight": "4px"}), text],
+            style={"fontSize": "11px", "color": colour,
+                   "border": f"1px solid {colour}", "borderRadius": "4px",
+                   "padding": "2px 8px"},
+            title=tip,
+        )
+
+    try:
+        conn = get_conn()
+        rep  = job_report(conn)
+        conn.close()
+    except Exception as exc:                       # noqa: BLE001
+        return _chip("⚠️", "crawl: error", YELLOW, f"Heartbeat check failed: {exc}")
+
+    late = overdue_jobs(rep)
+    lines = []
+    for j, e in rep.items():
+        age = "never" if e["never_run"] else f"{e['age_hours']:.0f}h ago"
+        lines.append(f"{j}: {age} (every {e['interval_hours']}h) — {e['label']}")
+    if not scheduler_enabled():
+        lines.append("Watchdog DISABLED via SEMI_DISABLE_SCHEDULER=1 — "
+                     "crawls must be driven externally.")
+    tip = "\n".join(lines)
+
+    if late:
+        return _chip("🔴", f"crawl: {len(late)} overdue", RED,
+                     "These jobs have not succeeded within their window:\n"
+                     + "\n".join(f"  · {j}" for j in late) + "\n\n" + tip)
+    if not scheduler_enabled():
+        return _chip("🟡", "crawl: external", YELLOW, tip)
+    return _chip("🟢", "crawl: on schedule", GREEN, tip)
+
+
+@app.callback(
     Output("data-freshness-badge", "children"),
     Input("status-interval", "n_intervals"),
 )
@@ -865,13 +1175,35 @@ def update_freshness_badge(_):
             title=f"Freshness check failed: {exc}",
         )
 
-    if not stale:
+    # Shape flags are advisory and never override a freshness breach: a stale
+    # source is a fact, a suspicious shape is a prompt to look. Red wins over
+    # amber so the badge keeps meaning one thing (BACKLOG SC-12).
+    try:
+        cons = _consistency_report()
+    except Exception:
+        cons = {"flags": []}
+    cflags = cons.get("flags", [])
+
+    if not stale and not cflags:
         return html.Span(
             [html.Span("🟢", style={"marginRight": "4px"}), "data: fresh"],
             style={"fontSize": "11px", "color": GREEN,
                    "border": f"1px solid {GREEN}", "borderRadius": "4px",
                    "padding": "2px 8px"},
-            title="Every tracked source is within its freshness SLA.",
+            title=(f"Every tracked source is within its freshness SLA, and "
+                   f"{cons.get('checked', 0)} series passed the shape checks."),
+        )
+
+    if not stale:
+        detail = "\n".join(f"{f['series']} [{f['rule']}]: {f['detail']}" for f in cflags)
+        return html.Span(
+            [html.Span("🟡", style={"marginRight": "4px"}),
+             f"{len(cflags)} shape flag{'s' if len(cflags) > 1 else ''}"],
+            style={"fontSize": "11px", "color": YELLOW,
+                   "border": f"1px solid {YELLOW}", "borderRadius": "4px",
+                   "padding": "2px 8px", "cursor": "help"},
+            title=("Every source is fresh, but these series look implausible — "
+                   "verify against the publisher before trusting them:\n\n" + detail),
         )
 
     def _why(k):
@@ -1132,6 +1464,124 @@ def tab_overview(tickers, start, end):
 # TAB 2 — FINANCIALS
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _valuation_snapshot_panel(tickers) -> html.Div:
+    """
+    Point-in-time valuation, sourced from ticker_valuation_history (QA F-02).
+
+    Every column here is stamped with the date it was OBSERVED. That stamp is
+    the whole point of the panel: the previous design put these same numbers in
+    a table headed by a fiscal quarter, which silently asserted a history the
+    free feed cannot supply.
+
+    The series starts empty and fills forward one row per crawl. When it is
+    empty the panel says so and says why, rather than rendering nothing — the
+    IV-03 principle: an empty column that explains itself is honest, a filled
+    one built from a proxy is not.
+    """
+    vdf = valuation_snapshot_data(list(tickers))
+
+    if vdf.empty:
+        return _card([
+            _section_title("Valuation Snapshot"),
+            html.Div(
+                "No valuation snapshot recorded yet. This series is observed, "
+                "not historical — it starts on the first crawl after this panel "
+                "shipped and gains one row per ticker per crawl. It cannot be "
+                "backfilled: the free feed exposes no historical trailing P/E "
+                "or market cap, and reconstructing one would restate today's "
+                "multiple as the past (the defect this panel replaced).",
+                style={"color": SUBTEXT, "fontSize": "13px", "lineHeight": "1.6"},
+            ),
+            _source_footer(
+                "Yahoo Finance (yfinance .info snapshot)",
+                "Observed values only — no point-in-time history available.",
+            ),
+        ])
+
+    show = vdf.copy()
+    as_of_vals = sorted(set(show["snapshot_date"].dropna().astype(str)))
+    as_of_label = as_of_vals[-1] if len(as_of_vals) == 1 else (
+        f"{as_of_vals[0]} → {as_of_vals[-1]}" if as_of_vals else "—"
+    )
+
+    def _fmt_cap(x):
+        return f"${x/1e9:,.1f}B" if pd.notna(x) else "—"
+
+    def _fmt_num(x):
+        return f"{x:,.2f}" if pd.notna(x) else "—"
+
+    out = pd.DataFrame({
+        "ticker":        show["ticker"],
+        "snapshot_date": show["snapshot_date"],
+        "close_price":   show["close_price"].map(_fmt_num),
+        "market_cap":    show["market_cap"].map(_fmt_cap),
+        "trailing_pe":   show["trailing_pe"].map(_fmt_num),
+        "forward_pe":    show["forward_pe"].map(_fmt_num),
+        "trailing_eps":  show["trailing_eps"].map(_fmt_num),
+        "price_to_book": show["price_to_book"].map(_fmt_num),
+    })
+
+    labels = {
+        "ticker":        "Ticker",
+        "snapshot_date": "Observed On",
+        "close_price":   "Price",
+        "market_cap":    "Market Cap",
+        "trailing_pe":   "P/E (TTM)",
+        "forward_pe":    "P/E (Fwd, est.)",
+        "trailing_eps":  "EPS (TTM)",
+        "price_to_book": "P/B",
+    }
+
+    # Per-row staleness: the snapshot is keyed to the last trading date, so
+    # anything more than a few sessions old means the crawl stopped running.
+    try:
+        newest = pd.to_datetime(max(as_of_vals))
+        age_days = (pd.Timestamp(_now_hkt()).tz_localize(None) - newest).days
+    except Exception:
+        age_days = None
+
+    stale_note = None
+    if age_days is not None and age_days > 4:
+        stale_note = html.Div(
+            f"⚠️  Newest snapshot is {age_days} days old. These are observed "
+            f"values from {as_of_label} — not current quotes. Do not read them "
+            f"as live pricing.",
+            style={"color": YELLOW, "fontSize": "12px", "marginBottom": "8px",
+                   "padding": "8px 10px", "border": f"1px solid {YELLOW}",
+                   "borderRadius": "4px"},
+        )
+
+    tbl = dash_table.DataTable(
+        data=out.to_dict("records"),
+        columns=[{"name": labels[c], "id": c} for c in out.columns],
+        style_table={"overflowX": "auto"},
+        style_cell={"backgroundColor": BG3, "color": TEXT, "border": "1px solid #30363d",
+                    "fontSize": "13px", "padding": "6px 10px"},
+        style_header={"backgroundColor": BG2, "color": ACCENT, "fontWeight": "600",
+                      "border": "1px solid #30363d"},
+        style_data_conditional=[{"if": {"row_index": "odd"}, "backgroundColor": BG2}],
+        page_size=20,
+    )
+
+    return _card([
+        _section_title(f"Valuation Snapshot  ·  Observed {as_of_label}"),
+        stale_note if stale_note else html.Div(),
+        html.Div(
+            "Point-in-time only. Each figure describes the date in the "
+            "“Observed On” column, not any fiscal quarter above — trailing P/E, "
+            "market cap and TTM EPS have no historical series in this feed. "
+            "Forward P/E is the vendor's consensus-derived estimate, not a "
+            "reported figure.",
+            style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "10px"},
+        ),
+        tbl,
+        _source_footer(
+            "Yahoo Finance (yfinance .info snapshot)",
+            "Observed, not point-in-time history. Vendor-normalised; not primary filings.",
+        ),
+    ])
+
+
 def tab_financials(tickers):
     """Render the Financials tab (all available data, up to 5 years)."""
     df = financials_data(tickers)
@@ -1192,25 +1642,41 @@ def tab_financials(tickers):
         return dcc.Graph(figure=fig, config={"displayModeBar": False})
 
     # Latest financials table
+    #
+    # pe_ratio and market_cap are deliberately ABSENT (QA finding F-02). They
+    # are properties of the observation date, not of period_end; the crawler now
+    # writes NULL here and the real values live in the Valuation Snapshot panel
+    # below, stamped with the date they were actually observed. Do not re-add
+    # them to this table — a snapshot in a column headed by a fiscal quarter is
+    # the defect, regardless of whether the newest row happens to be correct.
     latest_cols = ["ticker", "period_end", "revenue", "gross_margin",
-                   "op_margin", "net_margin", "pe_ratio", "eps", "market_cap"]
+                   "op_margin", "net_margin", "eps"]
     latest = df_view.sort_values("period_end").groupby("ticker").last().reset_index()
     tbl_data = latest[[c for c in latest_cols if c in latest.columns]].copy()
-    for col in ["revenue", "market_cap"]:
+    for col in ["revenue"]:
         if col in tbl_data:
             tbl_data[col] = (tbl_data[col] / 1e9).map(lambda x: f"${x:,.1f}B" if pd.notna(x) else "—")
     for col in ["gross_margin", "op_margin", "net_margin"]:
         if col in tbl_data:
             tbl_data[col] = tbl_data[col].map(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
-    for col in ["pe_ratio", "eps"]:
+    for col in ["eps"]:
         if col in tbl_data:
             tbl_data[col] = tbl_data[col].map(lambda x: f"{x:.2f}" if pd.notna(x) else "—")
     if "period_end" in tbl_data:
         tbl_data["period_end"] = tbl_data["period_end"].dt.strftime("%Y-%m-%d")
 
+    _FIN_COL_LABELS = {
+        "period_end":   "Period End",
+        "gross_margin": "Gross Margin",
+        "op_margin":    "Operating Margin",
+        "net_margin":   "Net Margin",
+        "eps":          "EPS (Diluted, Quarter)",
+    }
+
     tbl = dash_table.DataTable(
         data=tbl_data.to_dict("records"),
-        columns=[{"name": c.replace("_", " ").title(), "id": c} for c in tbl_data.columns],
+        columns=[{"name": _FIN_COL_LABELS.get(c, c.replace("_", " ").title()), "id": c}
+                 for c in tbl_data.columns],
         style_table={"overflowX": "auto"},
         style_cell={"backgroundColor": BG3, "color": TEXT, "border": "1px solid #30363d",
                     "fontSize": "13px", "padding": "6px 10px"},
@@ -1224,6 +1690,7 @@ def tab_financials(tickers):
 
     return html.Div([
         _card([_section_title("Latest Quarter Summary"), tbl]),
+        _valuation_snapshot_panel(tickers),
         dbc.Row([
             dbc.Col(_card(metric_chart("revenue",        "Revenue")),        width=6),
             dbc.Col(_card(metric_chart("gross_profit",   "Gross Profit")),   width=6),
@@ -2186,6 +2653,61 @@ def run_comparison(_, a_start, a_end, b_start, b_end, tickers):
 # SUPPLY CHAIN — DB HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── Modeled vs observed rendering (BACKLOG SC-16) ─────────────────────────────
+#
+# SC-12's shape checks found that 25 of 26 curated retail series are formula-
+# generated: R9-7950X falls exactly -$5.00/month for 12 months, Xeon-8490H runs
+# 40 consecutive steps at a constant ratio. They are honestly labelled
+# SRC_MODELED — but a reader takes direction and rate-of-change from a LINE
+# regardless of its footnote, which is the argument that retired the HBM series
+# in SC-09.
+#
+# So modeled series are drawn as markers with a faint dotted connector, never as
+# a solid line. The difference has to be visible at a glance, without reading a
+# legend or a footer: a solid line means somebody observed those points.
+#
+# Enterprise GPU/CPU (A100/H100/H200/B200/MI300X, EPYC, Xeon) can ONLY ever be
+# modeled — no free source publishes accelerator contract ASPs — so they keep
+# their values and lose the line. Consumer series additionally accumulate real
+# PassMark observations, which are drawn solid on top of the same axes.
+_MODELED_LINE = dict(width=1, dash="dot")
+_MODELED_MARKER = dict(size=6, symbol="circle-open")
+
+
+def _trace_style(is_modeled: bool, color: str, width: float = 2.0) -> dict:
+    """Plotly kwargs for one series. Observed = solid line; modeled = open
+    markers on a dotted connector. Use for EVERY sc_prices trace so the two can
+    never be confused, and so a future chart inherits the convention for free."""
+    if is_modeled:
+        return {
+            "mode": "lines+markers",
+            "line": dict(color=color, **_MODELED_LINE),
+            "marker": dict(color=color, **_MODELED_MARKER),
+            "opacity": 0.85,
+        }
+    return {
+        "mode": "lines+markers",
+        "line": dict(color=color, width=width),
+        "marker": dict(color=color, size=4),
+    }
+
+
+_MODELED_SUFFIX = "  (modeled)"
+
+
+def _modeled_note(what: str) -> html.Div:
+    """Standard in-panel disclosure for a chart carrying modeled series."""
+    return html.Div(
+        f"⚠️ {what} are MODELED estimates, not observations — drawn as open markers on a "
+        "dotted connector so they cannot be read as measured data. The month-to-month "
+        "shape is an author's assumption (several run at a constant step or constant "
+        "percentage for 10+ months); read the level, not the trend. Solid lines elsewhere "
+        "on this dashboard are observed. See BACKLOG SC-16.",
+        style={"color": YELLOW, "fontSize": "11px", "border": f"1px solid {YELLOW}",
+               "borderRadius": "4px", "padding": "6px 10px", "marginBottom": "10px"},
+    )
+
+
 def sc_prices_query(category: str, source: str = None) -> pd.DataFrame:
     """Return price history for all products in a category
     (GPU/GPU-Enterprise/CPU/CPU-Enterprise/RAM)."""
@@ -2206,13 +2728,6 @@ def sc_prices_query(category: str, source: str = None) -> pd.DataFrame:
         f"FROM sc_prices p LEFT JOIN sc_products c ON p.model_id=c.model_id "
         f"WHERE p.model_id IN ({ph}) {src_clause} ORDER BY p.date, p.model_id",
         model_ids,
-    )
-
-
-def sc_capacity_query(company: str = None) -> pd.DataFrame:
-    clause = f"WHERE company='{company}'" if company else ""
-    return query(
-        f"SELECT * FROM sc_capacity {clause} ORDER BY company, period"
     )
 
 
@@ -2514,14 +3029,18 @@ def _sc_vs_etf_panel():
         s = price_series[cat]
         s_norm = _normalise(s, common_start) if common_start else _normalise(s, s.index.min())
         col = CAT_COLORS.get(cat, ACCENT)
+        # SC-16: these indices are built entirely from modeled enterprise ASPs —
+        # no free source publishes accelerator contract prices — while the ETF
+        # they are plotted against is real market data. Open markers on a dotted
+        # connector keep that asymmetry visible; a dotted line alone did not,
+        # because the eye still reads a continuous path as a measured trend.
         fig.add_trace(go.Scatter(
             x=s_norm.index,
             y=s_norm.values.round(2),
-            name=f"{cat} Price Index",
-            mode="lines+markers",
-            line=dict(width=2, color=col, dash="dot"),
-            marker=dict(size=5, color=col),
-            hovertemplate=f"<b>{cat} Price Index</b><br>%{{x|%b %Y}}<br>Index: %{{y:.1f}}<extra></extra>",
+            name=f"{cat} Price Index{_MODELED_SUFFIX}",
+            **_trace_style(True, col),
+            hovertemplate=(f"<b>{cat} Price Index</b> (modeled)<br>"
+                           f"%{{x|%b %Y}}<br>Index: %{{y:.1f}}<extra></extra>"),
         ))
 
     # Reference line at 100
@@ -2761,6 +3280,7 @@ def _sc_vs_etf_panel():
 
     children = [
         _section_title(f"Enterprise AI Hardware Price Index vs {etf_ticker} ETF — Industry Correlation"),
+        _modeled_note("The GPU and CPU price indices on this chart"),
         html.P(note_etf, style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "12px"}),
         dcc.Graph(figure=fig, config={"displayModeBar": True}),
     ]
@@ -2918,7 +3438,7 @@ def tab_supply_chain():
         _sc_demand_panel(),
 
         # ── PANEL 5 + 6: Manufacturer Capacity & Occupancy ───────────────────
-        _sc_capacity_panel(),
+        _sc_fab_metrics_panel(),
         # Note: DRAM & HBM Spot Prices are now embedded in the RAM sub-tab above
     ])
 
@@ -3124,11 +3644,10 @@ def _sc_enterprise_gpu_section():
             col = COLOR_BY_MODEL.get(mid, CHART_COLORS[0])
             fig_price.add_trace(go.Scatter(
                 x=grp["date"], y=grp["price_usd"],
-                name=prod_name, mode="lines+markers",
-                line=dict(width=2.5, color=col),
-                marker=dict(size=4),
+                name=prod_name + _MODELED_SUFFIX,
+                **_trace_style(True, col),          # SC-16: modeled, never a solid line
                 hovertemplate=(
-                    f"<b>{prod_name}</b><br>%{{x|%b %Y}}<br>"
+                    f"<b>{prod_name}</b> (modeled)<br>%{{x|%b %Y}}<br>"
                     f"Price: $%{{y:,.0f}}<extra></extra>"
                 ),
             ))
@@ -3286,7 +3805,7 @@ def _sc_enterprise_gpu_section():
 
     return html.Div([
         dbc.Row([
-            dbc.Col(_card(dcc.Graph(figure=fig_price, config={"displayModeBar": True})), width=7),
+            dbc.Col(_card([_modeled_note("Enterprise GPU contract prices (A100 / H100 / H200 / B200 / MI300X)"), dcc.Graph(figure=fig_price, config={"displayModeBar": True})]), width=7),
             dbc.Col(_card(dcc.Graph(figure=fig_perf,  config={"displayModeBar": True})), width=5),
         ]),
         yoy_section,
@@ -3369,11 +3888,17 @@ def _sc_enterprise_cpu_section():
                 mid, ("solid", "circle", prod_name))
             fig_price.add_trace(go.Scatter(
                 x=grp["date"], y=grp["price_usd"],
-                name=legend_name, mode="lines+markers",
-                line=dict(width=2.5, color=col, dash=dash),
-                marker=dict(size=6, symbol=symbol, color=col),
+                name=legend_name + _MODELED_SUFFIX,
+                mode="lines+markers",
+                # SC-16: modeled — dotted connector, open marker. `symbol` still
+                # distinguishes the vendor; "-open" is appended so the modeled
+                # convention survives whatever symbol this series uses.
+                line=dict(width=1, color=col, dash="dot"),
+                marker=dict(size=7, symbol=str(symbol).replace("-open", "") + "-open",
+                            color=col),
+                opacity=0.85,
                 hovertemplate=(
-                    f"<b>{prod_name}</b><br>%{{x|%b %Y}}<br>"
+                    f"<b>{prod_name}</b> (modeled)<br>%{{x|%b %Y}}<br>"
                     f"Price: $%{{y:,.0f}}<extra></extra>"
                 ),
             ))
@@ -3530,7 +4055,7 @@ def _sc_enterprise_cpu_section():
 
     return html.Div([
         dbc.Row([
-            dbc.Col(_card(dcc.Graph(figure=fig_price, config={"displayModeBar": True})), width=7),
+            dbc.Col(_card([_modeled_note("Enterprise CPU ODP / contract ASPs (Xeon, EPYC)"), dcc.Graph(figure=fig_price, config={"displayModeBar": True})]), width=7),
             dbc.Col(_card(dcc.Graph(figure=fig_perf,  config={"displayModeBar": True})), width=5),
         ]),
         yoy_section,
@@ -3806,19 +4331,34 @@ def _sc_price_section(category: str):
 
     # ── Price history line chart — synced date range with DRAM panel ─────
     # Priority: PassMark historical > Curated (for RAM) > Newegg (bar, fallback)
-    df_hist = df_pass if not df_pass.empty else df_curated
+    # SC-16: show BOTH sources rather than picking one. The curated backbone is
+    # modeled (open markers, dotted) and the PassMark observations are drawn solid
+    # on the same axes, so the point where real data starts is visible. Previously
+    # this chose df_pass OR df_curated, which hid whichever it did not pick and
+    # made a modeled series indistinguishable from a measured one.
     fig_price = go.Figure()
-    if not df_hist.empty:
-        for i, (mid, grp) in enumerate(df_hist.groupby("model_id")):
-            short = grp["name"].iloc[0] if "name" in grp.columns else mid
-            col   = CHART_COLORS[i % len(CHART_COLORS)]
-            fig_price.add_trace(go.Scatter(
-                x=grp["date"], y=grp["price_usd"],
-                name=short, mode="lines+markers",
-                line=dict(width=2, color=col),
-                hovertemplate=f"<b>{short}</b><br>Date: %{{x}}<br>Price: $%{{y:.0f}}<extra></extra>",
-            ))
-    elif not df_new.empty:
+    _hist_parts = [(df_curated, True), (df_pass, False)]
+    _colors = {}
+    if any(not d.empty for d, _ in _hist_parts):
+        for d, is_modeled in _hist_parts:
+            if d.empty:
+                continue
+            for mid, grp in d.groupby("model_id"):
+                grp   = grp.sort_values("date")
+                short = grp["name"].iloc[0] if "name" in grp.columns else mid
+                col   = _colors.setdefault(mid, CHART_COLORS[len(_colors) % len(CHART_COLORS)])
+                fig_price.add_trace(go.Scatter(
+                    x=grp["date"], y=grp["price_usd"],
+                    name=short + (_MODELED_SUFFIX if is_modeled else "  (PassMark)"),
+                    legendgroup=mid,
+                    **_trace_style(is_modeled, col),
+                    hovertemplate=(f"<b>{short}</b>"
+                                   f"{' (modeled)' if is_modeled else ' (PassMark observed)'}"
+                                   f"<br>Date: %{{x}}<br>Price: $%{{y:.0f}}<extra></extra>"),
+                ))
+    df_hist = df_pass if not df_pass.empty else df_curated
+    _plotted = any(not d.empty for d, _ in _hist_parts)
+    if not _plotted and not df_new.empty:
         latest = df_new.sort_values("date").groupby("model_id").last().reset_index()
         fig_price.add_trace(go.Bar(
             x=latest["name"] if "name" in latest else latest["model_id"],
@@ -4017,7 +4557,7 @@ def _sc_price_section(category: str):
 
     return html.Div([
         dbc.Row([
-            dbc.Col(_card(dcc.Graph(figure=fig_price, config={"displayModeBar": True})), width=7),
+            dbc.Col(_card([_modeled_note("The curated price backbone on this chart"), dcc.Graph(figure=fig_price, config={"displayModeBar": True})]), width=7),
             dbc.Col(_card(dcc.Graph(figure=fig_pp,    config={"displayModeBar": True})), width=5),
         ]),
         yoy_section,
@@ -4278,185 +4818,115 @@ def _sc_demand_panel():
 
 # ── Manufacturer Capacity & Occupancy ────────────────────────────────────────
 
-def _sc_capacity_panel():
-    df = sc_capacity_query()
+def _sc_fab_metrics_panel():
+    """
+    Manufacturer disclosures — ONLY figures a company actually publishes.
 
+    Replaced _sc_capacity_panel() (BACKLOG SC-11). The old panel charted per-node
+    capacity and utilisation footnoted to earnings calls that never contained
+    them. What foundries do publish is revenue, margins, wafer shipments, revenue
+    mix by node and capex — so that is what this shows, and nothing else.
+    """
+    df = query("SELECT * FROM sc_fab_metrics ORDER BY company, metric_key, period")
     if df.empty:
         return _card([
-            _section_title("Manufacturer Capacity & Occupancy"),
-            html.P("No capacity data. Run: python supply_chain_crawler.py",
+            _section_title("Manufacturer Disclosures"),
+            html.P("No fab metrics loaded. Run: python supply_chain_crawler.py",
                    style={"color": SUBTEXT, "fontSize": "12px"}),
         ])
 
-    df["utilisation_pct"] = pd.to_numeric(df["utilisation_pct"], errors="coerce")
-    df["capacity_kwpm"]   = pd.to_numeric(df["capacity_kwpm"],   errors="coerce")
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    df = df.dropna(subset=["value"])
 
-    COMPANIES = ["TSMC", "Samsung", "SK Hynix", "Micron", "Intel"]
-    CO_COLORS  = {
-        "TSMC": "#00A3E0", "Samsung": "#1428A0", "SK Hynix": "#F15A24",
-        "Micron": "#E31837", "Intel": "#0071C5",
+    _LABELS = {
+        "revenue_usd_b":        "Net Revenue",
+        "gross_margin_pct":     "Gross Margin",
+        "operating_margin_pct": "Operating Margin",
+        "wafer_shipments_kpcs": "Wafer Shipments",
+        "node_revenue_pct":     "Revenue by Node",
+        "capex_usd_b":          "Capital Expenditure",
+        "utilisation_pct":      "Utilisation (as stated)",
     }
 
-    # ── Utilisation trend by company ─────────────────────────────────────
-    fig_util = go.Figure()
-    for company in COMPANIES:
-        sub = df[df["company"] == company].sort_values("period")
-        if sub.empty:
-            continue
-        # Average utilisation per quarter across all segments
-        avg = sub.groupby("period")["utilisation_pct"].mean().reset_index()
-        fig_util.add_trace(go.Scatter(
-            x=avg["period"], y=avg["utilisation_pct"],
-            name=company, mode="lines+markers",
-            line=dict(width=2, color=CO_COLORS.get(company, ACCENT)),
-            hovertemplate=f"<b>{company}</b><br>%{{x}}<br>Avg Util: %{{y:.0f}}%<extra></extra>",
+    # Revenue + margin trend, per company. One trace per (company, metric) so a
+    # company with only one disclosed quarter renders a point rather than an
+    # implied line — the §7.3 lesson about not drawing what was not observed.
+    fig = go.Figure()
+    trend = df[df["metric_key"].isin(["revenue_usd_b", "gross_margin_pct",
+                                      "operating_margin_pct"])]
+    for (company, mkey), grp in trend.groupby(["company", "metric_key"]):
+        grp = grp.sort_values("period")
+        fig.add_trace(go.Scatter(
+            x=grp["period"], y=grp["value"], mode="lines+markers",
+            name=f"{company} — {_LABELS.get(mkey, mkey)}",
+            yaxis="y2" if mkey.endswith("_pct") else "y",
+            hovertemplate=(f"<b>{company}</b> {_LABELS.get(mkey, mkey)}<br>"
+                           "%{x}<br>%{y:.2f}<extra></extra>"),
         ))
-    fig_util.add_hline(y=80, line_dash="dot", line_color=YELLOW, line_width=1,
-                       annotation_text="Healthy (80%)", annotation_position="right")
-    fig_util.update_layout(
+    fig.update_layout(
         **PLOTLY_TEMPLATE["layout"],
-        title="Manufacturer Occupancy — Average Fab Utilisation by Company (%)",
-        height=360, xaxis_title="Quarter", yaxis_title="Utilisation (%)",
+        title="Quarterly Disclosures — Revenue and Margins",
+        height=420,
+        yaxis2=dict(title="Margin (%)", overlaying="y", side="right",
+                    showgrid=False, color=SUBTEXT),
     )
-    fig_util.update_yaxes(range=[40, 105])
+    fig.update_yaxes(title_text="Net Revenue (US$B)")
 
-    # ── Latest utilisation gauge cards ────────────────────────────────────
-    gauge_figs = []
-    for company in COMPANIES:
-        sub = df[df["company"] == company].sort_values("period")
-        if sub.empty:
-            continue
-        latest_util = sub.groupby("period")["utilisation_pct"].mean().iloc[-1]
-        period      = sub["period"].iloc[-1]
-        col         = GREEN if latest_util >= 80 else YELLOW if latest_util >= 60 else RED
-
-        fig_g = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=latest_util,
-            number={"suffix": "%", "font": {"color": col, "size": 22}},
-            gauge=dict(
-                axis=dict(range=[0, 100], tickcolor=SUBTEXT),
-                bar=dict(color=col),
-                bgcolor=BG3,
-                bordercolor="#30363d",
-                steps=[
-                    {"range": [0,  60], "color": "#2d1b1b"},
-                    {"range": [60, 80], "color": "#2d2a1b"},
-                    {"range": [80, 100],"color": "#1b2d1b"},
-                ],
-                threshold=dict(line=dict(color=YELLOW, width=2), thickness=0.75, value=80),
-            ),
-            title={"text": f"<b>{company}</b><br><span style='font-size:10px;color:{SUBTEXT}'>"
-                           f"{period}</span>",
-                   "font": {"color": TEXT, "size": 13}},
-        ))
-        fig_g.update_layout(
-            paper_bgcolor=BG2, plot_bgcolor=BG2,
-            margin=dict(l=15, r=15, t=60, b=10),
-            height=200,
-        )
-        gauge_figs.append(dbc.Col(
-            _card(dcc.Graph(figure=fig_g, config={"displayModeBar": False})),
-            width=12 // min(len(COMPANIES), 5) or 2,
-        ))
-
-    # ── Capacity bar chart (wafers per month) ─────────────────────────────
-    # NOTE: each company/segment reports on its own schedule, so the "latest"
-    # row is NOT the same quarter for every bar. The reporting period is
-    # therefore stamped on each bar (x-label + text + hover) and the title
-    # states the actual span — never claim a single common quarter.
-    fig_cap = go.Figure()
-    latest_cap = df.sort_values("period").groupby(["company", "product_type"]).last().reset_index()
-    latest_cap["x_label"] = (
-        latest_cap["product_type"].astype(str)
-        + "<br><span style='font-size:9px;color:" + SUBTEXT + "'>"
-        + latest_cap["period"].astype(str) + "</span>"
+    # Detail table — every row carries the document it came from, because the
+    # entire point of SC-11 is that the citation has to be checkable.
+    show = df.copy()
+    show["Metric"] = show["metric_key"].map(lambda k: _LABELS.get(k, k))
+    show.loc[show["detail"] != "", "Metric"] = (
+        show.loc[show["detail"] != "", "Metric"] + " — " + show.loc[show["detail"] != "", "detail"]
     )
-    periods = sorted(p for p in latest_cap["period"].dropna().astype(str).unique())
-    if not periods:
-        period_span = "period not reported"
-    elif len(periods) == 1:
-        period_span = f"as of {periods[0]}"
-    else:
-        period_span = f"latest reported per segment · {periods[0]} – {periods[-1]}"
-
-    for company in COMPANIES:
-        sub = latest_cap[latest_cap["company"] == company]
-        if sub.empty:
-            continue
-        fig_cap.add_trace(go.Bar(
-            name=company,
-            x=sub["x_label"],
-            y=sub["capacity_kwpm"],
-            customdata=sub[["product_type", "period", "source"]].values,
-            text=sub["period"],
-            textposition="outside",
-            textfont=dict(size=9, color=SUBTEXT),
-            cliponaxis=False,
-            marker_color=CO_COLORS.get(company, ACCENT),
-            hovertemplate=(
-                f"<b>{company}</b><br>%{{customdata[0]}}<br>"
-                "Capacity: %{y:.0f}k wpm<br>"
-                "Reporting period: %{customdata[1]}<br>"
-                "Source: %{customdata[2]}<extra></extra>"
-            ),
-        ))
-    fig_cap.update_layout(
-        **PLOTLY_TEMPLATE["layout"],
-        title=("Manufacturer Capacity (1,000s of 300mm-eq wafers/month)"
-               f"<br><span style='font-size:10px;color:{SUBTEXT}'>{period_span}</span>"),
-        height=360, barmode="group", xaxis_title="Segment (reporting period)",
-        yaxis_title="Capacity (k wpm)",
-    )
-    fig_cap.update_xaxes(tickangle=-20)
-
-    # ── Detailed data table ───────────────────────────────────────────────
-    tbl_df = df[["company", "segment", "product_type", "period",
-                 "capacity_kwpm", "utilisation_pct", "notes"]].copy()
-    tbl_df = tbl_df.sort_values(["company", "period"])
-    tbl_df["utilisation_pct"] = tbl_df["utilisation_pct"].map(
-        lambda x: f"{x:.0f}%" if pd.notna(x) else "—")
-    tbl_df["capacity_kwpm"]   = tbl_df["capacity_kwpm"].map(
-        lambda x: f"{x:.0f}k" if pd.notna(x) else "—")
-    tbl_df.columns = ["Company", "Segment", "Product", "Period",
-                      "Capacity (k wpm)", "Utilisation", "Notes"]
+    show["Value"] = show.apply(lambda r: f"{r['value']:,.2f} {r['unit'] or ''}".strip(), axis=1)
+    tbl_df = show[["company", "period", "Metric", "Value", "source"]].rename(
+        columns={"company": "Company", "period": "Period", "source": "Source Document"})
     tbl = dash_table.DataTable(
         data=tbl_df.to_dict("records"),
         columns=[{"name": c, "id": c} for c in tbl_df.columns],
-        sort_action="native",
-        filter_action="native",
-        page_size=12,
         style_table={"overflowX": "auto"},
         style_cell={"backgroundColor": BG3, "color": TEXT, "border": "1px solid #30363d",
-                    "fontSize": "12px", "padding": "5px 8px"},
+                    "fontSize": "12px", "padding": "6px 10px", "textAlign": "left"},
         style_header={"backgroundColor": BG2, "color": ACCENT, "fontWeight": "600",
                       "border": "1px solid #30363d"},
         style_data_conditional=[{"if": {"row_index": "odd"}, "backgroundColor": BG2}],
+        page_size=15,
+    )
+
+    note = html.Div(
+        "ℹ️ This panel replaced the former Capacity & Occupancy chart (BACKLOG SC-11). "
+        "That chart plotted per-node wafer capacity and fab utilisation footnoted to "
+        "specific earnings calls — figures no foundry discloses at node granularity, so "
+        "the citations named documents that did not contain them. Those 31 rows were "
+        "deleted rather than relabelled. Only companies whose disclosures have actually "
+        "been read appear below; Samsung, SK Hynix, Micron and Intel are blank on purpose "
+        "until someone opens their filings.",
+        style={"color": SUBTEXT, "fontSize": "11px", "border": f"1px solid {SUBTEXT}",
+               "borderRadius": "4px", "padding": "6px 10px", "marginBottom": "10px"},
     )
 
     return html.Div([
         _card([
-            _section_title("Manufacturer Capacity & Occupancy"),
-            dbc.Row(gauge_figs, className="g-2"),
-        ]),
-        dbc.Row([
-            dbc.Col(_card(dcc.Graph(figure=fig_util, config={"displayModeBar": True})), width=7),
-            dbc.Col(_card([
-                dcc.Graph(figure=fig_cap, config={"displayModeBar": False}),
-                _source_footer(
-                    "TSMC / Samsung / SK Hynix / Micron / Intel — Quarterly Earnings Transcripts",
-                    f"Capacity shown is each segment's latest reported quarter ({period_span}); "
-                    "bars are not all the same period.",
-                ),
-            ]), width=5),
+            _section_title("Manufacturer Disclosures"),
+            note,
+            dcc.Graph(figure=fig, config={"displayModeBar": True}),
         ]),
         _card([
-            _section_title("Capacity Detail (from Earnings Calls)"),
+            _section_title("Disclosure Detail — every figure with its source document"),
             tbl,
-            _source_footer("TSMC / Samsung / SK Hynix / Micron / Intel — Quarterly Earnings Transcripts",
-                           "Update CURATED_CAPACITY in products_config.py each quarter."),
+            _source_footer(
+                "Company IR pages and quarterly reports (see the Source Document column)",
+                "Revenue and margins are live-crawled from TSMC's Quarterly Results page; "
+                "wafer shipments and revenue-mix-by-node are transcribed by hand from the "
+                "Management Report PDF. Before adding a row to CURATED_FAB_METRICS, open "
+                "the cited document and find the number — a blank series is honest, a "
+                "modelled one dressed as a disclosure is not."),
         ]),
     ])
+
+
+
 
 
 # ── DRAM Spot Prices ──────────────────────────────────────────────────────────
@@ -4584,12 +5054,40 @@ def health():
     returns 200 when the volume is bad: the deploy should stay up and shout,
     not fall over (the dashboard is read-mostly and still usable).
     """
-    return jsonify({
+    payload = {
         "status":        "ok",
         "db":            os.path.exists(DB_PATH),
         "volume_ok":     VOLUME_OK,
         "volume_reason": VOLUME_REASON,
-    }), 200
+    }
+    # Per-job crawl heartbeats (QA F-01). This is the field that answers "is
+    # anything actually refreshing this database?" — the question /health could
+    # not answer before, and the reason a dead schedule was invisible. Reported
+    # here (not only on the authenticated /api/db-stats) precisely because this
+    # is the endpoint an uptime probe already polls.
+    try:
+        conn = get_conn()
+        rep  = job_report(conn)
+        conn.close()
+        payload["jobs"] = {
+            j: {"last_success": e["last_success"], "age_hours": e["age_hours"],
+                "overdue": e["overdue"], "never_run": e["never_run"]}
+            for j, e in rep.items()
+        }
+        payload["overdue_jobs"]  = overdue_jobs(rep)
+        payload["scheduler_on"]  = scheduler_enabled()
+        # crawl_ok is SEPARATE from data_ok and shape_ok, for the same reason
+        # those two are separate from each other: "we stopped crawling" and "the
+        # publisher stopped publishing" have different fixes, and one boolean
+        # meaning both would be actionable for neither.
+        payload["crawl_ok"] = (len(payload["overdue_jobs"]) == 0)
+    except Exception as exc:                       # noqa: BLE001
+        payload["jobs"] = {"error": str(exc)}
+
+    # Still 200 on an overdue crawl, same rationale as the volume guard: a
+    # read-mostly dashboard serving known-stale data beats an outage, provided
+    # the staleness is loud. Railway must not restart-loop over it.
+    return jsonify(payload), 200
 
 
 # ── Full-dataset export ───────────────────────────────────────────────────────
@@ -4605,7 +5103,7 @@ _EXPORT_SHEET_NAMES = {
     "sc_products":          "SC Products",
     "sc_market_share":      "SC Market Share",
     "sc_dram_spot":         "SC DRAM Spot",
-    "sc_capacity":          "SC Fab Capacity",
+    "sc_fab_metrics":       "SC Fab Metrics",
     "sc_demand_indicators": "SC Demand Indicators",
     "options_iv":           "Options IV",
     "options_iv_history":   "Options IV History",
@@ -4783,8 +5281,8 @@ def db_stats():
         "daily_prices", "quarterly_financials", "market_sentiment",
         "cycle_analysis", "company_info", "crawl_runs",
         "sc_prices", "sc_market_share",
-        "sc_dram_spot", "sc_capacity", "options_iv",
-        "sc_demand_indicators",
+        "sc_dram_spot", "sc_fab_metrics", "options_iv",
+        "sc_demand_indicators", "ticker_valuation_history",
     ]
     stats = {
         "volume_ok":     VOLUME_OK,
@@ -4809,6 +5307,22 @@ def db_stats():
             )) if row else None
         except Exception:
             stats["last_crawl"] = None
+
+        # ── Per-job heartbeats (QA F-01) ──────────────────────────────────────
+        # `last_crawl` above is the newest run of ANY job, which is exactly why
+        # it could not detect a dead schedule: one healthy curated reload on
+        # every deploy kept it looking recent while nothing was being crawled.
+        # These fields are per-job and read the SAME job_report() the scheduler
+        # uses to decide what to run, so the two cannot disagree.
+        try:
+            jrep = job_report(conn)
+            stats["jobs"]          = jrep
+            stats["overdue_jobs"]  = overdue_jobs(jrep)
+            stats["overdue_count"] = len(stats["overdue_jobs"])
+            stats["crawl_ok"]      = (stats["overdue_count"] == 0)
+            stats["scheduler_on"]  = scheduler_enabled()
+        except Exception as exc:                   # noqa: BLE001
+            stats["jobs"] = {"error": str(exc)}
         conn.close()
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -4825,6 +5339,19 @@ def db_stats():
         stats["data_ok"]       = (len(stale) == 0)
     except Exception as e:
         stats["freshness"] = {"error": str(e)}
+
+    # ── Consistency (BACKLOG SC-12) ───────────────────────────────────────────
+    # Reported SEPARATELY from data_ok on purpose. Freshness is a fact (the SLA
+    # is breached or it is not); consistency is a suspicion, and folding a
+    # suspicion into the same boolean would make a green data_ok mean two
+    # different things and eventually get ignored.
+    try:
+        cons = _consistency_report()
+        stats["consistency"]       = cons
+        stats["consistency_flags"] = len(cons.get("flags", []))
+        stats["shape_ok"]          = cons.get("ok", True)
+    except Exception as e:
+        stats["consistency"] = {"error": str(e)}
 
     return jsonify(stats), 200
 

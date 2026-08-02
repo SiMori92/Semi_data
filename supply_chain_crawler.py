@@ -29,11 +29,12 @@ import requests
 from bs4 import BeautifulSoup
 
 from config import DB_PATH, REQUEST_DELAY_SECONDS, now_hkt as _now_hkt
+from job_heartbeat import start_job, finish_job, JOB_CURATED   # QA F-01
 from products_config import (
     ALL_PRODUCTS,
     CPU_ENTERPRISE_PRODUCTS,
     CPU_PRODUCTS,
-    CURATED_CAPACITY,
+    CURATED_FAB_METRICS,
     CURATED_DEMAND_INDICATORS,
     CURATED_DRAM_SPOT,
     CURATED_RETAIL_PRICES,
@@ -111,6 +112,32 @@ def init_supply_chain_db(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (model_name, period)
         );
 
+        -- Fab / manufacturer metrics — ONLY figures a company actually publishes
+        -- (BACKLOG SC-11). Replaced sc_capacity, whose per-node capacity_kwpm and
+        -- utilisation_pct were cited to earnings releases that never contained
+        -- them. Generic (metric_key, detail) shape so a new disclosure is a new
+        -- row, not a schema change.
+        --
+        -- metric_key vocabulary (extend deliberately):
+        --   revenue_usd_b        quarterly net revenue          detail=''
+        --   gross_margin_pct     quarterly gross margin         detail=''
+        --   operating_margin_pct quarterly operating margin     detail=''
+        --   wafer_shipments_kpcs 12-inch-equivalent wafers      detail=''
+        --   node_revenue_pct     % of wafer revenue by node     detail='3nm'
+        --   capex_usd_b          quarterly capital expenditure  detail=''
+        --   utilisation_pct      ONLY where a company states it detail=''
+        CREATE TABLE IF NOT EXISTS sc_fab_metrics (
+            company         TEXT    NOT NULL,
+            metric_key      TEXT    NOT NULL,
+            detail          TEXT    NOT NULL DEFAULT '',
+            period          TEXT    NOT NULL,   -- YYYY-Qn
+            value           REAL,
+            unit            TEXT,
+            source          TEXT,               -- must NAME a document containing the figure
+            notes           TEXT,
+            PRIMARY KEY (company, metric_key, detail, period)
+        );
+
         -- sc_semi_btb was DROPPED 2026-08-02 (BACKLOG SC-10) — see the drop
         -- statement after this script. Do not re-create it: the SEMI NA
         -- Book-to-Bill report was discontinued after Dec-2016 and the
@@ -126,18 +153,10 @@ def init_supply_chain_db(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (product_type, spec_label, period)
         );
 
-        -- Manufacturer capacity & utilisation
-        CREATE TABLE IF NOT EXISTS sc_capacity (
-            company         TEXT    NOT NULL,
-            segment         TEXT    NOT NULL,   -- Foundry | Memory
-            product_type    TEXT    NOT NULL,
-            period          TEXT    NOT NULL,   -- YYYY-Qn
-            capacity_kwpm   REAL,               -- 1000s of 300mm-eq wafers/month
-            utilisation_pct REAL,
-            source          TEXT,
-            notes           TEXT,
-            PRIMARY KEY (company, product_type, period)
-        );
+        -- sc_capacity was DROPPED 2026-08-02 (BACKLOG SC-11) — see the drop
+        -- statement after this script. Do not re-create it: per-node
+        -- capacity_kwpm / utilisation_pct are published by no foundry, so the
+        -- columns themselves invited the misattribution. Use sc_fab_metrics.
 
         -- Macro demand indicators (BACKLOG SC-06 / SC-00 fix B).
         -- Unified table for four free, authoritative series with different
@@ -187,6 +206,28 @@ def init_supply_chain_db(conn: sqlite3.Connection) -> None:
             "sc_demand_indicators[semi_wwsems_billings]. See BACKLOG SC-10.", n
         )
 
+    # BACKLOG SC-11 — drop sc_capacity, replaced by sc_fab_metrics.
+    #
+    # Every one of its 31 rows cited a named earnings release for per-NODE
+    # capacity_kwpm and utilisation_pct. No foundry — TSMC, Samsung, Intel, SMIC —
+    # discloses either at node granularity, so the citation named a document that
+    # does not contain the figure. Same defect as SC-00, in a table SC-05 missed.
+    #
+    # Dropped rather than migrated: the columns themselves were the problem, so a
+    # column rename (§7 rule 2) would have preserved the error in new clothing.
+    # Reproducible from git like sc_semi_btb — the rows were 100 % curated.
+    _cap = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sc_capacity'"
+    ).fetchone()[0]
+    if _cap:
+        n = conn.execute("SELECT COUNT(*) FROM sc_capacity").fetchone()[0]
+        conn.execute("DROP TABLE sc_capacity")
+        log.warning(
+            "Dropped sc_capacity (%d rows) — per-node capacity/utilisation attributed to "
+            "earnings releases that never published them. Replacement is sc_fab_metrics, "
+            "which stores only figures companies actually disclose. See BACKLOG SC-11.", n
+        )
+
     conn.commit()
     log.info("Supply-chain DB tables ready.")
 
@@ -226,18 +267,50 @@ def load_product_catalog(conn: sqlite3.Connection) -> None:
 # deletes every live row on the next deploy.
 SRC_LIVE_SPOT = "TrendForce spot page (live)"
 
+# Prefix for rows written by crawl_tsmc_quarterly(). Matched with LIKE 'prefix%'
+# by load_curated_fab_metrics()'s reconcile so the per-quarter suffix still
+# resolves. Change this without changing that query and every crawled quarter is
+# deleted on the next deploy (SC-14).
+SRC_LIVE_TSMC_Q = "TSMC Quarterly Results IR page (live)"
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CURATED DATA LOADERS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def load_curated_capacity(conn: sqlite3.Connection) -> None:
+def load_curated_fab_metrics(conn: sqlite3.Connection) -> None:
+    """
+    Load CURATED_FAB_METRICS, then reconcile (SC-14), scoped to exclude live rows.
+
+    Live writer is crawl_tsmc_quarterly(), which tags rows SRC_LIVE_TSMC_Q. Same
+    scoping requirement as load_curated_dram_spot(): an unscoped delete would wipe
+    every crawled quarter on the next deploy, because startup.sh runs
+    --curated-only on every boot.
+    """
     conn.executemany(
-        "INSERT OR REPLACE INTO sc_capacity VALUES (?,?,?,?,?,?,?,?)",
-        CURATED_CAPACITY,
+        "INSERT OR REPLACE INTO sc_fab_metrics VALUES (?,?,?,?,?,?,?,?)",
+        CURATED_FAB_METRICS,
     )
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS _fab_keep (c TEXT, m TEXT, d TEXT, p TEXT)")
+    conn.execute("DELETE FROM _fab_keep")
+    conn.executemany(
+        "INSERT INTO _fab_keep VALUES (?,?,?,?)",
+        [(r[0], r[1], r[2], r[3]) for r in CURATED_FAB_METRICS],
+    )
+    n = conn.execute(
+        """
+        DELETE FROM sc_fab_metrics
+         WHERE COALESCE(source, '') NOT LIKE ?
+           AND (company, metric_key, detail, period) NOT IN
+               (SELECT c, m, d, p FROM _fab_keep)
+        """,
+        (SRC_LIVE_TSMC_Q + "%",),
+    ).rowcount
     conn.commit()
-    log.info("Capacity data loaded — %d rows.", len(CURATED_CAPACITY))
+    log.info("Fab metrics loaded — %d rows.", len(CURATED_FAB_METRICS))
+    if n:
+        log.warning("Reconciled sc_fab_metrics — deleted %d withdrawn row(s). "
+                    "Live-crawled rows untouched.", n)
 
 
 def load_curated_dram_spot(conn: sqlite3.Connection) -> None:
@@ -911,8 +984,186 @@ def crawl_umc_revenue(conn: sqlite3.Connection) -> None:
               len(parsed), parsed[-1][0], parsed[-1][1])
 
 
+# ── TSMC quarterly actuals (BACKLOG SC-11) ────────────────────────────────────
+#
+# Precondition checked 2026-08-02: investor.tsmc.com/english/quarterly-results/
+# {year}/q{n} is server-rendered and carries a "Guidance" table whose first
+# numeric column is that quarter's ACTUAL (2Q26: revenue 40.20, GM 67.7%,
+# OM 60.3%). Confirmed by fetching the page, not assumed.
+#
+# Scope note: only revenue and the two margins are crawled. Wafer shipments and
+# revenue-mix-by-node live in the linked Management Report PDF, which is a
+# different parsing problem — they stay curated, transcribed by hand from a
+# document someone actually opened. Crawling what is easy and hand-checking what
+# is not is the correct split; inventing the hard half is what SC-11 fixed.
+_TSMC_Q_URL = "https://investor.tsmc.com/english/quarterly-results/{year}/q{q}"
+
+# "Net Revenue   (US$ billion)\n40.20\n39.0-40.2\n44.6-45.8" — first number after
+# the label is the actual; the ranges that follow are guidance and must not match
+# (they contain a hyphen, so a bare [\d.]+ anchored to the first cell is enough).
+_TSMC_Q_METRICS = [
+    (r"Net Revenue[^\n]*\n+\s*([\d.]+)\s*\n",  "revenue_usd_b",        "US$B", (1.0, 200.0)),
+    (r"Gross Margin\s*\n+\s*([\d.]+)\s*%",     "gross_margin_pct",     "%",    (0.0, 100.0)),
+    (r"Operating Margin\s*\n+\s*([\d.]+)\s*%", "operating_margin_pct", "%",    (0.0, 100.0)),
+]
+
+
+def _parse_tsmc_quarterly(text: str) -> list:
+    """Return [(metric_key, value, unit), ...] from one quarterly-results page."""
+    out = []
+    for pattern, key, unit, (lo, hi) in _TSMC_Q_METRICS:
+        m = re.search(pattern, text)
+        if not m:
+            continue
+        try:
+            v = float(m.group(1))
+        except ValueError:
+            continue
+        if lo <= v <= hi:                 # implausible values are dropped, not stored
+            out.append((key, v, unit))
+    return out
+
+
+def crawl_tsmc_quarterly(conn: sqlite3.Connection, quarters: int = 6) -> None:
+    """
+    Walk back `quarters` quarters of TSMC results pages and store the actuals.
+
+    Per-quarter try/except (§6.1): a future quarter has no page and an older one
+    may render differently — neither may abort the run. A quarter that yields
+    fewer than all three metrics is skipped entirely rather than written partially,
+    so a layout change cannot leave a half-populated quarter looking complete.
+    """
+    now = _now_hkt()
+    y, q = now.year, (now.month - 1) // 3 + 1
+    stored = 0
+    for _ in range(quarters):
+        q -= 1
+        if q == 0:
+            y, q = y - 1, 4
+        period = f"{y}-Q{q}"
+        try:
+            resp = SESSION.get(_TSMC_Q_URL.format(year=y, q=q), timeout=25)
+            if resp.status_code != 200:
+                continue
+            text = BeautifulSoup(resp.text, "html.parser").get_text("\n")
+            rows = _parse_tsmc_quarterly(text)
+            if len(rows) < len(_TSMC_Q_METRICS):
+                log.warning("TSMC %s — only %d/%d metrics parsed; quarter skipped.",
+                            period, len(rows), len(_TSMC_Q_METRICS))
+                continue
+            conn.executemany(
+                "INSERT OR REPLACE INTO sc_fab_metrics VALUES (?,?,?,?,?,?,?,?)",
+                [("TSMC", key, "", period, val, unit,
+                  f"{SRC_LIVE_TSMC_Q} — {period}", "Guidance table, actual column")
+                 for key, val, unit in rows],
+            )
+            conn.commit()
+            stored += 1
+        except Exception as exc:
+            log.warning("TSMC %s quarterly fetch failed: %s", period, exc)
+            continue
+        time.sleep(REQUEST_DELAY_SECONDS)
+
+    if stored:
+        log.info("TSMC quarterly actuals — %d quarter(s) stored.", stored)
+    else:
+        log.error("TSMC QUARTERLY PARSE REJECTED — no quarter yielded a full metric "
+                  "set; page layout has likely changed. Curated seed retained. "
+                  "See BACKLOG SC-11.")
+
+
+# ── Nanya Technology monthly revenue (BACKLOG SC-13) ──────────────────────────
+#
+# Precondition checked 2026-08-02 before writing this parser (the SC-06 rule):
+# nanya.com/en/IR/36?Year=YYYY returns a SERVER-RENDERED HTML table
+# (Month | Consolidated Net Revenue | MoM Change | YoY Change) with a plain year
+# query parameter. Confirmed, not assumed.
+#
+# Column order differs from TSMC and UMC: Nanya prints MoM BEFORE YoY. Reading
+# them positionally without checking would silently swap two published figures —
+# the sort of error that produces a plausible-looking number, which is the whole
+# class this project keeps getting bitten by.
+_NANYA_URL = "https://www.nanya.com/en/IR/36?Year={year}"
+
+_NANYA_MONTHS = ["January", "February", "March", "April", "May", "June", "July",
+                 "August", "September", "October", "November", "December"]
+
+# "January\n15,309,988\n27.4%\n608.0%" — future months render as blank cells and
+# simply do not match. The month name is anchored so the "Accumulated Revenue"
+# summary row (which has no month and a meaningless MoM) can never be captured.
+_NANYA_ROW_RE = re.compile(
+    r"\b(" + "|".join(_NANYA_MONTHS) + r")\s*\n+"
+    r"\s*([\d,]{4,15})\s*\n+"
+    r"\s*(-?[\d.]+)\s*%\s*\n+"
+    r"\s*(-?[\d.]+)\s*%"
+)
+
+
+def _parse_nanya_revenue(text: str, year: int) -> list:
+    """
+    Parse Nanya's monthly-revenue IR page.
+
+    Returns [(period, value_ntb, yoy_pct, seq_pct), ...] — matching the tuple
+    order used by _parse_tsmc_revenue/_parse_umc_revenue, NOT the page's column
+    order. Nanya publishes both MoM and YoY, so neither is derived here.
+    """
+    rows = []
+    for mon_name, raw_thousands, mom, yoy in _NANYA_ROW_RE.findall(text):
+        mon = _NANYA_MONTHS.index(mon_name) + 1
+        try:
+            value_ntb = float(raw_thousands.replace(",", "")) / 1_000_000.0
+            yoy_pct, seq_pct = float(yoy), float(mom)
+        except ValueError:
+            continue
+        rows.append((mon, f"{year:04d}-{mon:02d}", value_ntb, yoy_pct, seq_pct))
+    rows.sort(key=lambda r: r[0])
+    return [(p, v, y, s) for _, p, v, y, s in rows]
+
+
+def crawl_nanya_revenue(conn: sqlite3.Connection) -> None:
+    """
+    Fetch Nanya's monthly revenue and store it as sc_demand_indicators.
+
+    Validation gate (SC-01/SC-02): reject the whole run unless every parsed month
+    is inside Nanya's plausible range. NT$0.5B–NT$100B is deliberately wide — it
+    spans the 2023 trough and leaves headroom above the 2026 spike, so it catches
+    a unit error (thousands read as units would be ~1000x out) without pretending
+    to know what the next print should be.
+    """
+    year = int(_now_hkt().strftime("%Y"))
+    url = _NANYA_URL.format(year=year)
+    log.info("Nanya monthly revenue — fetching %s …", url)
+    try:
+        resp = SESSION.get(url, timeout=25)
+        resp.raise_for_status()
+        text = BeautifulSoup(resp.text, "html.parser").get_text("\n")
+    except Exception as exc:
+        log.error("NANYA REVENUE FETCH FAILED: %s — curated seed retained.", exc)
+        return
+
+    parsed = _parse_nanya_revenue(text, year)
+    bad = [p for p in parsed if not (0.5 <= p[1] <= 100)]
+    if not parsed or bad:
+        log.error(
+            "NANYA REVENUE PARSE REJECTED (%s) — page layout has likely changed. "
+            "Curated seed retained; see BACKLOG SC-13.",
+            "no rows parsed" if not parsed else f"{len(bad)} implausible value(s)",
+        )
+        return
+
+    conn.executemany(
+        "INSERT OR REPLACE INTO sc_demand_indicators VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [("nanya_revenue", "Nanya Monthly Revenue", period, "month", value, "NT$B",
+          yoy, seq, "Nanya IR", "Nanya IR (live crawl)")
+         for period, value, yoy, seq in parsed],
+    )
+    conn.commit()
+    log.info("Nanya monthly revenue — %d month(s) stored, latest %s = NT$%.1fB (%+.1f%% YoY).",
+             len(parsed), parsed[-1][0], parsed[-1][1], parsed[-1][2])
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-# LIVE SOURCE 5 — TrendForce DRAM spot price page (BACKLOG SC-15)
+# LIVE SOURCE 6 — TrendForce DRAM spot price page (BACKLOG SC-15)
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # Precondition checked on 2026-08-02 before a line of this was written (the SC-06
@@ -1091,7 +1342,7 @@ def crawl_supply_chain(quick: bool = False, curated_only: bool = False) -> None:
     load_product_catalog(conn)
 
     log.info("─── Step 2: Load curated capacity & DRAM data ──────────────")
-    load_curated_capacity(conn)
+    load_curated_fab_metrics(conn)
     load_curated_dram_spot(conn)
     load_curated_retail_prices(conn)
     load_curated_steam_survey(conn)   # seed Steam data; live crawl may overwrite
@@ -1099,27 +1350,45 @@ def crawl_supply_chain(quick: bool = False, curated_only: bool = False) -> None:
     purge_null_price_rows(conn)       # BACKLOG SC-01 — idempotent cleanup
 
     if curated_only:
+        # Recorded under a DISTINCT job name (QA F-01). This path makes zero
+        # network calls, so it must never satisfy the live-scrape SLA — a
+        # container that only ever reboots would otherwise look exactly like a
+        # container that is actually crawling.
+        _cur_id = start_job(conn, JOB_CURATED)
+        finish_job(conn, _cur_id, "completed", note="curated reload only; no network calls")
         conn.close()
         log.info("✅  Curated data load complete (--curated-only; no network calls).")
         return
 
-    log.info("─── Step 3: Live sources ────────────────────────────────────")
-    if not quick:
-        crawl_passmark(conn)
-        time.sleep(REQUEST_DELAY_SECONDS * 2)
-        crawl_newegg(conn)
+    run_id = start_job(conn, "supply_chain")
+    try:
+        log.info("─── Step 3: Live sources ────────────────────────────────────")
+        if not quick:
+            crawl_passmark(conn)
+            time.sleep(REQUEST_DELAY_SECONDS * 2)
+            crawl_newegg(conn)
+            time.sleep(REQUEST_DELAY_SECONDS)
+        else:
+            log.info("  [--quick] Skipping PassMark + Newegg scraping.")
+
+        crawl_steam_survey(conn)
         time.sleep(REQUEST_DELAY_SECONDS)
-    else:
-        log.info("  [--quick] Skipping PassMark + Newegg scraping.")
+        crawl_trendforce_spot(conn)
+        time.sleep(REQUEST_DELAY_SECONDS)
+        crawl_tsmc_revenue(conn)
+        time.sleep(REQUEST_DELAY_SECONDS)
+        crawl_umc_revenue(conn)
+        time.sleep(REQUEST_DELAY_SECONDS)
+        crawl_nanya_revenue(conn)
+        time.sleep(REQUEST_DELAY_SECONDS)
+        crawl_tsmc_quarterly(conn)
+    except Exception as exc:
+        finish_job(conn, run_id, "failed", note=f"{type(exc).__name__}: {exc}")
+        conn.close()
+        raise
 
-    crawl_steam_survey(conn)
-    time.sleep(REQUEST_DELAY_SECONDS)
-    crawl_trendforce_spot(conn)
-    time.sleep(REQUEST_DELAY_SECONDS)
-    crawl_tsmc_revenue(conn)
-    time.sleep(REQUEST_DELAY_SECONDS)
-    crawl_umc_revenue(conn)
-
+    finish_job(conn, run_id, "completed",
+               note="quick (no PassMark/Newegg)" if quick else "full")
     conn.close()
     log.info("✅  Supply chain crawl complete.")
 

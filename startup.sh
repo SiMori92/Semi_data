@@ -70,6 +70,15 @@ fi
 echo "--- Reloading curated supply-chain data ---"
 python supply_chain_crawler.py --curated-only
 
+# ── Data-integrity purges (idempotent, zero network) ──────────────────────────
+# Runs on EVERY deploy, deliberately outside the row-count gate below. The full
+# crawl is gated on an empty daily_prices plus an external schedule, so a fix
+# that only lives in the crawler never reaches rows already on the volume
+# (same lesson as SC-14). Currently NULLs the snapshot P/E and market-cap values
+# that were written into historical quarterly rows — QA finding F-02.
+echo "--- Running data-integrity purges ---"
+python crawler.py --purge-only
+
 # ── Check if database has actual price data (not just an empty schema) ────────
 ROW_COUNT=$(python3 -c "
 import sqlite3, os
@@ -105,23 +114,35 @@ else
     echo "=== Price data found — skipping full crawl ==="
 fi
 
-# ── Implied-volatility crawl (backgrounded, NOT in the healthcheck path) ──────
-# iv_crawler.py takes ~90s for 35 tickers (two option-chain fetches each). Adding
-# that to the seed block above would eat the healthcheckTimeout=300 window that
-# the price crawl already needs, so it runs detached: gunicorn comes up
-# immediately and IV rows land a couple of minutes later.
+# ── Crawl watchdog (backgrounded, NOT in the healthcheck path) ────────────────
+# THIS IS THE SCHEDULE (QA finding F-01). Before this existed, the full crawlers
+# ran only when daily_prices was empty — i.e. once, ever — and every subsequent
+# refresh depended on a Railway Cron that lived in no file in this repo.
 #
-# This is a convenience refresh on boot, NOT the schedule. The real cadence is a
-# Railway Cron running `python iv_crawler.py` once per weekday after the US close
-# — a deploy-triggered crawl alone would leave IV stale for as long as nobody
-# redeploys. A silent failure here is caught by the options_iv freshness SLA in
-# dashboard.py `_FRESHNESS_SPEC` (4 days) and the navbar IV badge; the crawler's
-# own coverage gate refuses to write a partial snapshot.
+# It cannot be a Railway cron service: a volume attaches to exactly ONE service,
+# so a sibling service cannot reach /data, and putting cronSchedule in
+# railway.toml would turn THIS service into a cron job and take the dashboard
+# down. See scheduler.py's header for the full reasoning.
+#
+# Started here, once, BEFORE `exec gunicorn` — not inside the app — so
+# `--workers 2` cannot run two copies of it. scheduler.py also takes an flock,
+# so a second instance started by hand exits instead of double-crawling.
+# It evaluates on a timer and runs whatever is past its interval, which means a
+# deploy landing mid-window recovers the missed run instead of skipping the day.
+#
+# Skipped on ephemeral storage for the same reason the seed crawl is: crawling
+# into a container layer that is about to be discarded makes a broken deploy look
+# healthy. Set SEMI_DISABLE_SCHEDULER=1 if an external Railway Cron already
+# drives these crawlers and you want exactly one driver.
 if [ "$VOLUME_OK" = "1" ] || [ "$SEMI_ALLOW_EPHEMERAL_SEED" = "1" ]; then
-    echo "--- Starting iv_crawler.py in the background (IV rows in ~2 min) ---"
-    python iv_crawler.py &
+    if [ "$SEMI_DISABLE_SCHEDULER" = "1" ]; then
+        echo "=== Watchdog DISABLED (SEMI_DISABLE_SCHEDULER=1) — crawls must be driven externally ==="
+    else
+        echo "--- Starting scheduler.py watchdog in the background ---"
+        python scheduler.py &
+    fi
 else
-    echo "=== IV crawl SKIPPED — storage is ephemeral (see volume guard above) ==="
+    echo "=== Watchdog SKIPPED — storage is ephemeral (see volume guard above) ==="
 fi
 
 # ── Start the web server ──────────────────────────────────────────────────────

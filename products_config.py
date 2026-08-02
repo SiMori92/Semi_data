@@ -361,88 +361,43 @@ RAM_PRODUCTS = {
     },
 }
 
-# ── Curated Manufacturer Capacity & Utilisation ───────────────────────────────
-# Source: public earnings call transcripts, investor presentations.
-# Each row: (company, segment, product_type, period, capacity_kwpm, utilisation_pct, source, notes)
-#   capacity_kwpm = thousands of 300mm-equivalent wafers per month
-#   utilisation_pct = reported fab/production utilisation
-CURATED_CAPACITY = [
-    # ─────────────────────── TSMC ─────────────────────────────────────────────
-    # Advanced nodes (≤5nm): GPU compute, Apple, AMD CPU, NVDA
-    ("TSMC", "Foundry", "GPU/CPU Advanced (≤5nm)", "2023-Q4", 130, 75,
-     "TSMC Q4 2023 Earnings", "Demand recovery led by AI ASIC / NVDA H100/H200"),
-    ("TSMC", "Foundry", "GPU/CPU Advanced (≤5nm)", "2024-Q1", 140, 80,
-     "TSMC Q1 2024 Earnings", "CoWoS advanced packaging capacity became primary bottleneck"),
-    ("TSMC", "Foundry", "GPU/CPU Advanced (≤5nm)", "2024-Q2", 145, 85,
-     "TSMC Q2 2024 Earnings", "AI accelerator demand driving record N5/N4 loading"),
-    ("TSMC", "Foundry", "GPU/CPU Advanced (≤5nm)", "2024-Q3", 150, 88,
-     "TSMC Q3 2024 Earnings", "N3 ramp accelerating; CoWoS capacity doubling in 2025"),
-    ("TSMC", "Foundry", "GPU/CPU Advanced (≤5nm)", "2024-Q4", 155, 90,
-     "TSMC Q4 2024 Earnings", "Full utilisation on 3nm/4nm; capacity constrained by CoWoS"),
-    ("TSMC", "Foundry", "GPU/CPU Advanced (≤5nm)", "2025-Q1", 160, 92,
-     "TSMC Q1 2025 Earnings", "AI demand record high; Arizona Fab 21 Phase 1 online"),
-    # Legacy nodes (≥28nm): Automotive, IoT, consumer
-    ("TSMC", "Foundry", "Legacy (≥28nm)",           "2023-Q4", 420, 70,
-     "TSMC Q4 2023 Earnings", "Automotive recovery beginning; consumer still weak"),
-    ("TSMC", "Foundry", "Legacy (≥28nm)",           "2024-Q2", 420, 74,
-     "TSMC Q2 2024 Earnings", "IoT and automotive gradually recovering"),
-    ("TSMC", "Foundry", "Legacy (≥28nm)",           "2024-Q4", 420, 78,
-     "TSMC Q4 2024 Earnings", "Recovery broadening; N28/N22 fully loaded for power ICs"),
-
-    # ─────────────────────── Samsung ──────────────────────────────────────────
-    # Foundry (Logic)
-    ("Samsung", "Foundry", "GPU/CPU (4nm/3nm GAA)", "2023-Q4", 80, 52,
-     "Samsung Q4 2023 Earnings", "Yield issues at 3nm GAA; customers cautious"),
-    ("Samsung", "Foundry", "GPU/CPU (4nm/3nm GAA)", "2024-Q2", 80, 55,
-     "Samsung Q2 2024 Earnings", "Qualcomm/AMD limited orders; yield improvements ongoing"),
-    ("Samsung", "Foundry", "GPU/CPU (4nm/3nm GAA)", "2024-Q4", 82, 58,
-     "Samsung Q4 2024 Earnings", "New 3nm GAA customers qualifying; still lagging TSMC on advanced"),
-    # DRAM
-    ("Samsung", "Memory",  "DRAM (All Nodes)",       "2023-Q4", 550, 68,
-     "Samsung Q4 2023 Earnings", "Supply cuts sustained through 2023 to stabilise ASP"),
-    ("Samsung", "Memory",  "DRAM (All Nodes)",       "2024-Q2", 580, 76,
-     "Samsung Q2 2024 Earnings", "HBM3E ramp taking share of capacity from standard DRAM"),
-    ("Samsung", "Memory",  "DRAM (All Nodes)",       "2024-Q4", 600, 82,
-     "Samsung Q4 2024 Earnings", "Standard DRAM ASP recovery; HBM mix increasing"),
-    # NAND
-    ("Samsung", "Memory",  "NAND Flash",             "2023-Q4", 850, 65,
-     "Samsung Q4 2023 Earnings", "Aggressive production cut to stabilise NAND pricing"),
-    ("Samsung", "Memory",  "NAND Flash",             "2024-Q4", 900, 78,
-     "Samsung Q4 2024 Earnings", "Enterprise SSD demand recovery; QLC ramp for data centers"),
-
-    # ─────────────────────── SK Hynix ─────────────────────────────────────────
-    ("SK Hynix", "Memory", "HBM3 / HBM3E",          "2024-Q1", 28,  98,
-     "SK Hynix Q1 2024 Earnings", "Essentially all HBM3E allocated to NVIDIA through 2024"),
-    ("SK Hynix", "Memory", "HBM3 / HBM3E",          "2024-Q4", 35,  100,
-     "SK Hynix Q4 2024 Earnings", "Sold out; 2025 allocation sold to hyperscalers/NVDA/AMD"),
-    ("SK Hynix", "Memory", "HBM3 / HBM3E",          "2025-Q1", 42,  100,
-     "SK Hynix Q1 2025 Earnings", "Capacity expanding; 12-Hi HBM3E ramping; HBM4 sampling"),
-    ("SK Hynix", "Memory", "DRAM (Standard DDR4/5)", "2023-Q4", 320, 70,
-     "SK Hynix Q4 2023 Earnings", "Capacity being redirected to HBM; standard DRAM under-invested"),
-    ("SK Hynix", "Memory", "DRAM (Standard DDR4/5)", "2024-Q4", 345, 84,
-     "SK Hynix Q4 2024 Earnings", "Strong AI server DRAM (DDR5 RDIMM) demand"),
-
-    # ─────────────────────── Micron ───────────────────────────────────────────
-    ("Micron", "Memory",   "DRAM (All)",             "2023-Q4", 250, 72,
-     "Micron Q4 FY2023 Earnings", "Production cuts and node migration underway"),
-    ("Micron", "Memory",   "DRAM (All)",             "2024-Q2", 265, 80,
-     "Micron Q2 FY2024 Earnings", "HBM3E qualification at NVIDIA secured; ramp starting"),
-    ("Micron", "Memory",   "DRAM (All)",             "2024-Q4", 280, 85,
-     "Micron Q4 FY2024 Earnings", "HBM3E supply allocated through calendar 2025"),
-    ("Micron", "Memory",   "HBM3E",                  "2025-Q1", 15,  100,
-     "Micron Q1 FY2025 Earnings", "All HBM3E sold out; meaningful revenue contribution from 2025"),
-    ("Micron", "Memory",   "NAND Flash",             "2023-Q4", 350, 65,
-     "Micron Q4 FY2023 Earnings", "Aggressive bit output reduction to clear inventory"),
-    ("Micron", "Memory",   "NAND Flash",             "2024-Q4", 370, 77,
-     "Micron Q4 FY2024 Earnings", "Enterprise SSD recovery; data centre SSD strong"),
-
-    # ─────────────────────── Intel ────────────────────────────────────────────
-    ("Intel",   "Foundry",  "CPU (Intel 7 / Intel 4)", "2023-Q4", 115, 68,
-     "Intel Q4 2023 Earnings", "PC market recovery; AI PC transition starting"),
-    ("Intel",   "Foundry",  "CPU (Intel 7 / Intel 4)", "2024-Q4", 120, 72,
-     "Intel Q4 2024 Earnings", "Arrow Lake on Intel 20A/TSMC hybrid; internal yield improving"),
-    ("Intel",   "Foundry",  "Intel 18A (External)",    "2025-Q1", 10,  45,
-     "Intel Q1 2025 Earnings", "Early production; Amazon, Microsoft qualifying; major ramp H2 2025"),
+# ── Fab / manufacturer metrics — ONLY what companies actually publish ─────────
+# BACKLOG SC-11. Replaces CURATED_CAPACITY, whose 31 rows attributed per-NODE
+# capacity_kwpm and utilisation_pct to named earnings releases. No foundry
+# publishes either at node granularity, so every one of those citations named a
+# document that did not contain the figure — SC-00's defect in a table SC-05
+# never reached. The old rows are deleted, not relabelled (CLAUDE.md §8).
+#
+# RULE FOR THIS LIST: before adding a row, open the cited document and find the
+# number. If you cannot, the row does not belong here. A blank series is honest;
+# a modelled one dressed as a disclosure is the bug this ticket exists to fix.
+#
+# Each row: (company, metric_key, detail, period, value, unit, source, notes)
+# metric_key vocabulary is documented on the sc_fab_metrics DDL in
+# supply_chain_crawler.py. TSMC rows below are also live-crawled by
+# crawl_tsmc_quarterly(); they are seeded so the panel is populated before the
+# first crawl.
+CURATED_FAB_METRICS = [
+    # ── TSMC 2026-Q2 — investor.tsmc.com/english/quarterly-results/2026/q2 ────
+    # Guidance table, "2Q26 Actual" column (read 2026-08-02).
+    ("TSMC", "revenue_usd_b",        "", "2026-Q2", 40.20, "US$B", "TSMC 2Q26 Quarterly Results (guidance table, actual)", "Verified on the IR page, not inferred"),
+    ("TSMC", "gross_margin_pct",     "", "2026-Q2", 67.7,  "%",    "TSMC 2Q26 Quarterly Results (guidance table, actual)", ""),
+    ("TSMC", "operating_margin_pct", "", "2026-Q2", 60.3,  "%",    "TSMC 2Q26 Quarterly Results (guidance table, actual)", ""),
+    # From the 2Q26 Management Report (wafer shipments + revenue mix by node).
+    # These are the ONLY manufacturing-side figures TSMC discloses — note there
+    # is no per-node capacity and no utilisation rate, which is exactly why the
+    # old table could not have been sourced the way it claimed.
+    ("TSMC", "wafer_shipments_kpcs", "",     "2026-Q2", 4336.0, "k 12-inch-eq", "TSMC 2Q26 Management Report", "12-inch equivalent wafers shipped"),
+    ("TSMC", "node_revenue_pct",     "2nm",  "2026-Q2", 3.0,  "% of wafer rev", "TSMC 2Q26 Management Report", ""),
+    ("TSMC", "node_revenue_pct",     "3nm",  "2026-Q2", 30.0, "% of wafer rev", "TSMC 2Q26 Management Report", ""),
+    ("TSMC", "node_revenue_pct",     "5nm",  "2026-Q2", 33.0, "% of wafer rev", "TSMC 2Q26 Management Report", ""),
+    #
+    # DELIBERATELY EMPTY: Samsung, SK Hynix, Micron, Intel.
+    # The old table carried 22 rows across those four. None of their per-node
+    # capacity or utilisation figures are published, and their capex//wafer
+    # disclosures were not verified in this pass — so nothing is written for them
+    # rather than carrying the previous numbers over under a new column name.
+    # Add them only against a document you have opened. See BACKLOG SC-11.
 ]
 
 # ── Curated DRAM & HBM Spot Prices ───────────────────────────────────────────
@@ -1692,6 +1647,22 @@ CURATED_DEMAND_INDICATORS = [
     ("umc_revenue", "UMC Monthly Revenue", "2026-04", "month", 22.664, "NT$B", 10.80, 8.80, "UMC IR", "umc.com/en/IR_Financial/monthly_sales_revenue"),
     ("umc_revenue", "UMC Monthly Revenue", "2026-05", "month", 22.944, "NT$B", 17.78, 1.24, "UMC IR", "umc.com/en/IR_Financial/monthly_sales_revenue"),
     ("umc_revenue", "UMC Monthly Revenue", "2026-06", "month", 23.125, "NT$B", 22.85, 0.79, "UMC IR", "released 2026-07-06"),
+
+    # ── Nanya Technology monthly revenue [Source: Nanya IR] (BACKLOG SC-13) ──
+    # NT$ thousands -> NT$B (÷1,000,000). MoM and YoY are Nanya's own published
+    # columns, transcribed from nanya.com/en/IR/36?Year=2026 (read 2026-08-02).
+    # Live-crawled by crawl_nanya_revenue() from the same page; these rows are the
+    # seed so the panel is populated before the first crawl.
+    #
+    # Nanya is the highest-signal addition available: a pure-play commodity DRAM
+    # maker, monthly, statutory. Its +730% YoY independently corroborates the
+    # WSTS billings and DDR spot moves — the memory layer that SC-04 falsified and
+    # SC-08 could only partly rebuild now has a published revenue series behind it.
+    ("nanya_revenue", "Nanya Monthly Revenue", "2026-01", "month", 15.310, "NT$B", 608.0, 27.4, "Nanya IR", "nanya.com/en/IR/36"),
+    ("nanya_revenue", "Nanya Monthly Revenue", "2026-02", "month", 15.607, "NT$B", 586.7,  1.9, "Nanya IR", "nanya.com/en/IR/36"),
+    ("nanya_revenue", "Nanya Monthly Revenue", "2026-03", "month", 18.170, "NT$B", 560.0, 16.4, "Nanya IR", "nanya.com/en/IR/36"),
+    ("nanya_revenue", "Nanya Monthly Revenue", "2026-04", "month", 25.491, "NT$B", 717.3, 40.3, "Nanya IR", "nanya.com/en/IR/36"),
+    ("nanya_revenue", "Nanya Monthly Revenue", "2026-05", "month", 27.670, "NT$B", 730.1,  8.6, "Nanya IR", "nanya.com/en/IR/36"),
 
     # ── Korea MOTIE/KITA — 1st-20-days semiconductor export value ────────────
     ("korea_chip_exports_20d", "Korea Semiconductor Exports (1st 20 days)", "2026-07", "month",

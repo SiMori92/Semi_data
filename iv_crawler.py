@@ -57,6 +57,7 @@ import pandas as pd
 import requests
 
 from config import DB_PATH, TICKER_MAP, now_hkt as _now_hkt
+from job_heartbeat import start_job, finish_job   # QA F-01 — run heartbeats
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
@@ -454,6 +455,32 @@ def crawl_iv(tickers: Optional[List[str]] = None,
     return report
 
 
+def _record_iv_heartbeat(db_path: str, report: dict) -> None:
+    """
+    Heartbeat for the IV job (QA F-01).
+
+    Status is keyed on report["written"], NOT on "did crawl_iv return". A run
+    aborted by the coverage gate returns a perfectly well-formed report having
+    written nothing — marking that 'completed' would let the watchdog and
+    /health certify an outage as a successful run, which is the exact failure
+    this ticket exists to remove.
+    """
+    try:
+        with sqlite3.connect(db_path) as conn:
+            rid = start_job(conn, "iv", attempted=report.get("attempted", 0))
+            finish_job(
+                conn, rid,
+                status="completed" if report.get("written") else "failed",
+                ok=report.get("resolved", 0),
+                note="coverage %.0f%%%s" % (
+                    report.get("coverage", 0) * 100,
+                    "" if report.get("written") else " — below floor, nothing written",
+                ),
+            )
+    except Exception:
+        pass
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Cloud-native implied-volatility crawler")
     ap.add_argument("--tickers", nargs="*", default=None, help="display names, e.g. NVDA AMD")
@@ -466,6 +493,10 @@ def main() -> None:
     rep = crawl_iv(tickers=args.tickers, dry_run=args.dry_run, db_path=args.db)
     log.info("Coverage %d/%d (%.0f%%)  written=%s",
              rep["resolved"], rep["attempted"], rep["coverage"] * 100, rep["written"])
+    # --dry-run deliberately records NO heartbeat: a manual dry run must not
+    # satisfy the scheduler's "this job ran today" test.
+    if not args.dry_run:
+        _record_iv_heartbeat(args.db or DB_PATH, rep)
 
 
 if __name__ == "__main__":
