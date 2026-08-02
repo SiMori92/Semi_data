@@ -142,12 +142,13 @@ _FRESHNESS_SPEC = {
     "cycle_analysis":       ("snapshot_date", "date",      4),
     "quarterly_financials": ("period_end",    "date",    120),
     "options_iv":           ("snapshot_date", "date",      4),
-    "sc_dram_spot":         ("period",        "month",    45),
-    # sc_semi_btb is intentionally ABSENT: the panel was removed in SC-00 fix B
-    # and the table is a dead no-op kept only to avoid a rename migration (§7
-    # rule 2). Monitoring a table nothing renders would fire forever and teach
-    # the reader to ignore the badge. Unmonitored is correct here — but it is
-    # the ONLY table for which that is true.
+    # sc_dram_spot is intentionally ABSENT: it is reported per product_type via
+    # _SC_DRAM_SLA below. A table-level entry would let one fresh series certify
+    # the whole table (BACKLOG SC-08) — see the comment there.
+    # sc_semi_btb no longer exists — dropped in SC-10 after SC-00 removed its
+    # panel. It was the one table deliberately left unmonitored here; deleting it
+    # removed the exception rather than the monitoring. Every remaining table is
+    # covered, either by an entry above or by a per-key SLA dict below.
     # 120d, not 60d: Valve publishes the survey with a 1–3 month lag, and this
     # SLA must agree with the "As of" badge in _sc_steam_panel() (red at 4+
     # months). Two surfaces disagreeing about the same table is how a real
@@ -177,6 +178,30 @@ _SC_DEMAND_SLA = {
 }
 _SC_DEMAND_KIND = {
     "semi_wwsems_billings": "quarter",
+}
+
+# sc_dram_spot — per product_type, same per-key pattern as _SC_PRICE_SLA (SC-08).
+#
+# Why the table-level SLA had to go: on 2026-08-02 this table reported
+# days_stale=33, unhealthy=False on the strength of ONE row (the DDR4 2026-06
+# anchor SC-04 added), while DDR5's newest observation was 2024-12 — a 20-month
+# hole through the largest DRAM upcycle on record. MAX(period) over a table that
+# holds several independent series answers "is ANY series fresh?", which is never
+# the question worth asking. This is SC-03's own lesson one level down: the fix
+# for sc_prices was a per-source SLA, and sc_dram_spot needed the same.
+#
+# An unlisted product_type falls back to 45d. Add a key when you add a series.
+# NOT tightened to ~10d despite crawl_trendforce_spot() going live in SC-15:
+# the full supply-chain crawl runs only on an empty DB or a manual ⚡ Run Crawl,
+# so today the live crawler fires rarely and a tight SLA would breach constantly
+# and train the reader to ignore the badge (the SC-04 calibration lesson).
+# Tighten to 10d in the SAME change that adds the Railway Cron schedule —
+# a crawler does not make data fresh until something runs it.
+_SC_DRAM_SLA = {
+    "DDR4":  45,   # TrendForce quotes the mainstream chip weekly
+    "DDR5":  45,
+    "HBM3":  75,   # withdrawn (SC-09); key retained so a restored series is
+    "HBM3E": 75,   # monitored from its first row rather than silently unwatched
 }
 
 
@@ -245,6 +270,18 @@ def _freshness_report() -> dict:
             f"sc_prices[{src}]", r["mx"], "date", _SC_PRICE_SLA.get(src, 45), n,
             extra={"null_price_pct": round((n - prc) / n * 100, 1) if n else 0.0},
         )
+
+    # sc_dram_spot — per product_type (BACKLOG SC-08). Reported as
+    # sc_dram_spot[ddr5] etc., matching the sc_prices[...] / sc_demand[...] shape
+    # already used by the badge, so no caller needs to learn a new key format.
+    df = query(
+        "SELECT product_type, COUNT(*) AS n, MAX(period) AS mx "
+        "FROM sc_dram_spot GROUP BY product_type"
+    )
+    for _, r in df.iterrows():
+        pt = str(r["product_type"])
+        _entry(f"sc_dram_spot[{pt.lower()}]", r["mx"], "month",
+               _SC_DRAM_SLA.get(pt, 45), int(r["n"]))
 
     # sc_demand_indicators — per indicator_key (BACKLOG SC-06); table may not
     # exist yet on an old DB, so this must degrade gracefully like the others.
@@ -861,36 +898,51 @@ def update_freshness_badge(_):
     Input("status-interval", "n_intervals"),
 )
 def update_ibkr_badge(_):
-    """Show a small IBKR connection-status chip in the navbar."""
-    enabled = ibkr_is_enabled()
-    has_data = not query(
-        "SELECT 1 FROM options_iv LIMIT 1"
-    ).empty if enabled else False
+    """Navbar chip reporting whether an IV series EXISTS and where it came from.
 
-    if not enabled:
+    Previously this reported IBKR *enablement*, which was the wrong question: it
+    read ⚫ disabled while a perfectly good derived IV series was populating the
+    Sentiment tab. A status chip must describe the data, not one possible
+    producer of it.
+    """
+    latest = query(
+        "SELECT source, MAX(snapshot_date) AS d, COUNT(DISTINCT ticker) AS n "
+        "FROM options_iv "
+        "WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM options_iv) "
+        "GROUP BY source ORDER BY n DESC"
+    )
+
+    if latest.empty:
         return html.Span(
-            [html.Span("⚫", style={"marginRight": "4px"}), "IBKR: disabled"],
+            [html.Span("⚫", style={"marginRight": "4px"}), "IV: none"],
             style={"fontSize": "11px", "color": SUBTEXT,
-                   "border": f"1px solid #30363d", "borderRadius": "4px",
-                   "padding": "2px 8px", "cursor": "default"},
-            title="Set 'enabled': true in ibkr_config.json to activate",
+                   "border": "1px solid #30363d", "borderRadius": "4px",
+                   "padding": "2px 8px", "cursor": "help"},
+            title=("No rows in options_iv.\n"
+                   "Run: python3 iv_crawler.py   (no broker or subscription needed)"),
         )
-    elif has_data:
-        return html.Span(
-            [html.Span("🟢", style={"marginRight": "4px"}), "IBKR: live IV"],
-            style={"fontSize": "11px", "color": GREEN,
-                   "border": f"1px solid {GREEN}", "borderRadius": "4px",
-                   "padding": "2px 8px"},
-            title="Real-time IV data from Interactive Brokers",
-        )
-    else:
-        return html.Span(
-            [html.Span("🟡", style={"marginRight": "4px"}), "IBKR: no data yet"],
-            style={"fontSize": "11px", "color": YELLOW,
-                   "border": f"1px solid {YELLOW}", "borderRadius": "4px",
-                   "padding": "2px 8px"},
-            title="IBKR enabled but no IV data — run: python ibkr_options_crawler.py",
-        )
+
+    short, desc, published = _iv_source_meta(latest.iloc[0]["source"])
+    tickers = int(latest["n"].sum())
+    as_of = latest.iloc[0]["d"]
+    detail = "\n".join(
+        "%s — %d tickers" % (_iv_source_meta(r["source"])[1], int(r["n"]))
+        for _, r in latest.iterrows()
+    )
+    # Derived series get YELLOW, published get GREEN. Same convention as the
+    # HV30 fallback badge: colour encodes provenance strength, not freshness.
+    colour = GREEN if published else YELLOW
+    return html.Span(
+        [html.Span("🟢" if published else "🟡", style={"marginRight": "4px"}),
+         "IV: %s (%d)" % (short, tickers)],
+        style={"fontSize": "11px", "color": colour,
+               "border": f"1px solid {colour}", "borderRadius": "4px",
+               "padding": "2px 8px", "cursor": "help"},
+        title="As of %s\n%s\n\n%s" % (
+            as_of, detail,
+            "Published index." if published
+            else "✳ Derived metric — our own construction, not a published index."),
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1204,8 +1256,72 @@ def tab_financials(tickers):
 # TAB 3 — MARKET SENTIMENT
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── IV provenance labelling ──────────────────────────────────────────────────
+# options_iv is written by TWO producers with identical schemas (iv_crawler.py
+# and the IBKR relay), distinguished only by `source`. Nothing in the UI may
+# hardcode a producer name — that is how the old "IBKR Real-Time" titles ended
+# up sitting above derived Yahoo numbers.
+_IV_SOURCE_META = {
+    # source-column prefix : (short badge label, long description, is_published)
+    "derived-yfinance-atm30": (
+        "IV30*",
+        "Derived — 30d ATM constant-maturity interpolation over Yahoo option chains",
+        False,
+    ),
+    "Deribit DVOL": (
+        "DVOL",
+        "Deribit DVOL 30-day implied-volatility index (published)",
+        True,
+    ),
+    "IBKR": (
+        "IBKR",
+        "Interactive Brokers real-time IV (relayed from local TWS/Gateway)",
+        True,
+    ),
+    "relay": (
+        "IBKR",
+        "Interactive Brokers real-time IV (relayed from local TWS/Gateway)",
+        True,
+    ),
+}
+
+
+def _iv_source_meta(source_value):
+    """Map an options_iv.source string to (short label, description, is_published).
+
+    Matched by PREFIX, because iv_crawler.py appends a proxy suffix — e.g.
+    'derived-yfinance-atm30 (proxy:GLD)' for Gold, whose IV is really GLD's.
+    Unknown values fall through to the raw string rather than being silently
+    relabelled as something recognised: mislabelling a source is the §8
+    violation this whole helper exists to prevent.
+    """
+    if not isinstance(source_value, str) or not source_value:
+        return ("IV", "Unlabelled source", False)
+    for prefix, meta in _IV_SOURCE_META.items():
+        if source_value.startswith(prefix):
+            return meta
+    return (source_value[:12], source_value, False)
+
+
+def _iv_source_summary(iv_df):
+    """One banner line describing every source actually present in the frame."""
+    if iv_df is None or iv_df.empty or "source" not in iv_df.columns:
+        return "—", False
+    metas = [_iv_source_meta(s) for s in sorted(iv_df["source"].dropna().unique())]
+    descriptions = []
+    for _short, desc, _pub in metas:
+        if desc not in descriptions:
+            descriptions.append(desc)
+    all_published = all(pub for _s, _d, pub in metas) if metas else False
+    return " · ".join(descriptions), all_published
+
+
 def _ibkr_iv_data(tickers: list) -> pd.DataFrame:
-    """Load IBKR IV snapshots for selected tickers (latest row per ticker)."""
+    """Load IV snapshots for selected tickers (latest row per ticker).
+
+    Named for IBKR historically; it is now source-agnostic — iv_crawler.py and
+    the IBKR relay write the same schema and are distinguished by `source`.
+    """
     if not tickers:
         return pd.DataFrame()
     ph = ",".join("?" * len(tickers))
@@ -1240,15 +1356,22 @@ def tab_sentiment(tickers):
         return _card(html.P("No sentiment data found. Run crawler.py first.", style={"color": SUBTEXT}))
 
     # ── Data source banner ────────────────────────────────────────────────
+    iv_src_desc, iv_all_published = _iv_source_summary(ibkr_iv)
     source_note = (
         html.Div([
             html.Span("📡 Options IV source: ", style={"color": SUBTEXT, "fontSize": "12px"}),
             html.Span(
-                "Interactive Brokers (real-time)" if has_ibkr else "Yahoo Finance (delayed ATM estimate)",
-                style={"color": ACCENT if has_ibkr else YELLOW, "fontSize": "12px", "fontWeight": "600"},
+                iv_src_desc if has_ibkr else "Yahoo Finance snapshot IV (crawler.py) / HV30 fallback",
+                style={"color": ACCENT if iv_all_published else YELLOW,
+                       "fontSize": "12px", "fontWeight": "600"},
             ),
+            # An asterisked series is DERIVED, not published. Saying so here is
+            # not decoration: it is the §8 zero-hallucination rule applied to a
+            # metric this app computes itself (cf. SRC_MODELED in the SC tab).
             html.Span(
-                " — run python ibkr_options_crawler.py to upgrade to IBKR real-time data" if not has_ibkr else "",
+                "  ✳ derived metric — our own constant-maturity construction, not a published index"
+                if (has_ibkr and not iv_all_published) else
+                ("" if has_ibkr else " — run python3 iv_crawler.py to populate a 30d ATM IV series"),
                 style={"color": SUBTEXT, "fontSize": "11px"},
             ),
         ], style={"marginBottom": "12px"})
@@ -1278,7 +1401,7 @@ def tab_sentiment(tickers):
             ))
         fig_term.update_layout(
             **PLOTLY_TEMPLATE["layout"],
-            title="Options IV — Term Structure per Ticker (IBKR Real-Time)",
+            title="Options IV — Term Structure per Ticker",
             barmode="group", height=380,
             xaxis_title="Ticker", yaxis_title="Implied Volatility (%)",
         )
@@ -1338,7 +1461,7 @@ def tab_sentiment(tickers):
                 ))
         fig_ivh.update_layout(
             **PLOTLY_TEMPLATE["layout"],
-            title="Daily Implied Volatility History (IBKR)",
+            title="Daily Implied Volatility History",
             height=340, xaxis_title="Date", yaxis_title="IV (%)",
             hovermode="x unified",
         )
@@ -1381,8 +1504,22 @@ def tab_sentiment(tickers):
 
         iv_section = html.Div([
             _card([
-                _section_title("Options IV — Snapshot Table (IBKR Real-Time)"),
+                _section_title("Options IV — Snapshot Table"),
                 iv_table,
+                html.Div(
+                    "Source: " + iv_src_desc,
+                    style={"color": SUBTEXT, "fontSize": "11px", "marginTop": "6px"},
+                ),
+                # Blank averages are correct, not broken: an option chain is
+                # point-in-time, so the equity series cannot be backfilled and a
+                # "1Y Avg" does not exist until 252 snapshots accumulate.
+                # Printing a 3-day mean under that header is the fabricated-metric
+                # failure in §7.3. Crypto (DVOL) has real published history and
+                # populates immediately.
+                html.Div(
+                    "Blank averages/percentiles accumulate daily — option chains cannot be backfilled.",
+                    style={"color": SUBTEXT, "fontSize": "11px", "fontStyle": "italic"},
+                ),
             ]),
             _card(dcc.Graph(figure=fig_term, config={"displayModeBar": True})),
             dbc.Row([
@@ -1514,11 +1651,19 @@ def tab_sentiment(tickers):
     tbl_df["_sort_key"] = tbl_df["ticker"].map(lambda t: _cat_rank.get(t, (99, 99)))
     tbl_df = tbl_df.sort_values("_sort_key").drop(columns=["_sort_key"])
 
-    # 2. IV column — IBKR preferred; yfinance next; HV30 final fallback
+    # 2. IV column — options_iv preferred; yfinance snapshot next; HV30 last.
+    # The badge text comes from the ROW's own source, never a run-level constant:
+    # a mixed frame (derived equities + published DVOL crypto) must not label all
+    # of them with whichever producer happened to write the first row.
     if has_ibkr:
-        iv_now = ibkr_iv[["ticker", "iv_current"]].rename(columns={"iv_current": "_iv_val"})
+        iv_now = ibkr_iv[["ticker", "iv_current", "source"]].rename(
+            columns={"iv_current": "_iv_val"})
         tbl_df = tbl_df.merge(iv_now, on="ticker", how="left")
-        tbl_df["iv_source"] = tbl_df["_iv_val"].apply(lambda x: "IBKR" if pd.notna(x) else "N/A")
+        tbl_df["iv_source"] = tbl_df.apply(
+            lambda r: _iv_source_meta(r["source"])[0] if pd.notna(r["_iv_val"]) else "N/A",
+            axis=1,
+        )
+        tbl_df = tbl_df.drop(columns=["source"], errors="ignore")
     else:
         tbl_df = tbl_df.merge(sent[["ticker", "implied_volatility"]].rename(
             columns={"implied_volatility": "_iv_val"}), on="ticker", how="left")
@@ -1576,6 +1721,12 @@ def tab_sentiment(tickers):
     cond_styles += [
         {"if": {"filter_query": '{Vol Source} = "IBKR"',  "column_id": "Vol Source"},
          "color": GREEN,  "fontWeight": "600"},
+        {"if": {"filter_query": '{Vol Source} = "DVOL"',  "column_id": "Vol Source"},
+         "color": GREEN,  "fontWeight": "600"},
+        # Derived, so ACCENT rather than GREEN — visually distinct from a
+        # published index at a glance.
+        {"if": {"filter_query": '{Vol Source} = "IV30*"', "column_id": "Vol Source"},
+         "color": ACCENT, "fontWeight": "600"},
         {"if": {"filter_query": '{Vol Source} = "IV"',    "column_id": "Vol Source"},
          "color": ACCENT, "fontWeight": "600"},
         {"if": {"filter_query": '{Vol Source} = "HV30"',  "column_id": "Vol Source"},
@@ -2232,7 +2383,10 @@ def _sc_vs_etf_panel():
     Falls back to SMH if SOXX has not been crawled yet.
     GPU = NVIDIA/AMD AI accelerators (A100 → H100 → H200 → B200 + MI300X).
     CPU = Intel Xeon Platinum + AMD EPYC server-class CPUs.
-    RAM = HBM3 / HBM3E per-stack contract price (the AI memory benchmark).
+    RAM = withdrawn (BACKLOG SC-09). The HBM per-stack rows were the modeled
+    per-GB series × stack capacity, so the "RAM" line was a rescaled copy of a
+    fabricated series, not corroboration. `_HBM_PRODUCTS` stays registered and
+    the `if df.empty: continue` guard below drops the category cleanly.
     Vertical markers indicate when each new generation reached GA.
     """
 
@@ -2597,8 +2751,10 @@ def _sc_vs_etf_panel():
         f"{etf_ticker} (iShares Semiconductor ETF) as a proxy for semiconductor "
         f"industry equity performance. "
         f"GPU = NVIDIA/AMD AI accelerators (A100 → H100 → H200 → B200, MI300X); "
-        f"CPU = Intel Xeon Platinum + AMD EPYC server flagship SKUs; "
-        f"RAM = HBM3/HBM3E per-stack contract ASP (the AI memory price benchmark). "
+        f"CPU = Intel Xeon Platinum + AMD EPYC server flagship SKUs. "
+        f"The RAM (HBM) index has been WITHDRAWN — those rows were the per-GB "
+        f"modeled series multiplied by stack capacity, not an independent "
+        f"observation (BACKLOG SC-09). "
         f"▲ markers indicate when each new product generation reached GA — "
         f"the index tracks the full portfolio across generations."
     )
@@ -2627,8 +2783,8 @@ def _sc_vs_etf_panel():
                 "Category-level average enterprise ASP for the most recent month — "
                 "mean across all tracked models per category: "
                 "GPU = AI accelerators (A100/H100/H200/B200 + MI300X); "
-                "CPU = Intel Xeon Platinum + AMD EPYC server SKUs; "
-                "RAM = HBM3/HBM3E per-stack contract price.",
+                "CPU = Intel Xeon Platinum + AMD EPYC server SKUs. "
+                "RAM (HBM) withdrawn — see BACKLOG SC-09.",
                 style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "8px"},
             ),
             snapshot_tbl,
@@ -2637,11 +2793,13 @@ def _sc_vs_etf_panel():
     etf_note = (f"SOXX (iShares Semiconductor ETF)" if etf_ticker == "SOXX"
                 else f"{etf_ticker} (VanEck Semiconductor ETF — SOXX proxy until SOXX is crawled)")
     children.append(_source_footer(
-        f"NVIDIA/AMD/Intel launch ODP (baseline) + {SRC_MODELED} (GPU/CPU/HBM contract-price trend)  ·  "
+        f"NVIDIA/AMD/Intel launch ODP (baseline) + {SRC_MODELED} (GPU/CPU contract-price trend)  ·  "
         f"Yahoo Finance / yfinance ({etf_note})",
         "GPU index = avg contract ASP across A100/H100/H200/B200/MI300X per month.  "
         "CPU index = avg ODP-derived ASP across Xeon Platinum + EPYC server SKUs.  "
-        "RAM index = HBM3 (48 GB stack) / HBM3E (96 GB stack) per-stack contract price.  "
+        "⚠ RAM index REMOVED 2026-08-02: the HBM per-stack rows were CURATED_DRAM_SPOT's "
+        "modeled per-GB series × 48/96 GB — a restatement of one modeled series, presented "
+        "as a second corroborating one (BACKLOG SC-09).  "
         f"All series normalised to 100 at common start: "
         f"{common_start.strftime('%Y-%m') if common_start else 'N/A'}.  "
         "▲ markers = product generation GA dates.",
@@ -2867,13 +3025,8 @@ def _sc_dram_inline(height: int = 360) -> html.Div:
         "DDR4 (8Gb die) and DDR5 (16Gb die) are quoted in USD per benchmark die — "
         "the single bare chip that OEMs solder onto a DIMM; these prices move with "
         "consumer PC demand and inventory cycles. "
-        "HBM3 and HBM3E are quoted in USD per GB of stack capacity — a contract price "
-        "negotiated between SK Hynix / Samsung / Micron and hyperscalers such as "
-        "NVIDIA and Google; they reflect AI accelerator supply tightness rather than "
-        "consumer demand. Because the two layers use different units they should be "
-        "read independently here — focus on the direction and rate of change for each, "
-        "not on comparing absolute levels across series. HBM3 pricing ends Dec 2023 "
-        "(superseded by HBM3E); an amber period marks a series that is no longer quoted.",
+        "HBM3/HBM3E (USD per GB of stack capacity) is no longer plotted — see the "
+        "withdrawal notice above. An amber period marks a series that is no longer quoted.",
         style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "10px"},
     )
 
@@ -2881,12 +3034,20 @@ def _sc_dram_inline(height: int = 360) -> html.Div:
     # without saying so, a reader sees a broken line and assumes a rendering bug
     # rather than a data decision. (BACKLOG SC-04)
     dram_gap_note = html.Div(
-        "⚠️ DDR4/DDR5 data for Jan 2025 – May 2026 has been WITHDRAWN, not lost. Those rows "
-        "decayed ~1–2% every month for 17 straight months while TrendForce reported "
+        "⚠️ DDR4/DDR5 data between Jan 2025 and early 2026 has been WITHDRAWN, not lost. Those "
+        "rows decayed ~1–2% every month for 17 straight months while TrendForce reported "
         "conventional DRAM contract prices rising 93–98% QoQ in 1Q26 — the series was "
         "synthetic and is now deleted rather than shown. The break in the line is the gap; "
-        "the 2024 and 2026 points are not continuous. Backfill only from dated TrendForce "
-        "releases (BACKLOG SC-04).",
+        "the 2024 and 2026 points are not continuous. The 2026 points are individually "
+        "sourced TrendForce spot observations (date stamped in the Source column), not a "
+        "backfill — DDR5 currently has a single 2026 anchor, so read it as a level check, "
+        "not a trend (BACKLOG SC-04 / SC-08). "
+        "⚠️ ALL HBM3/HBM3E rows have also been WITHDRAWN (BACKLOG SC-09): HBM3E rose exactly "
+        "+$0.20 every two-month step for 15 consecutive steps and never once deviated — the "
+        "same synthetic shape as the DDR rows above, and probably the wrong direction, since "
+        "HBM3E contract prices fell from their H1-2025 peak before a mid-2026 rebound. No "
+        "citable per-GB anchor was found, so nothing replaces them rather than an estimate "
+        "being shown.",
         style={
             "color": YELLOW, "fontSize": "11px", "fontWeight": "600",
             "border": f"1px solid {YELLOW}", "borderRadius": "4px",
@@ -2904,14 +3065,13 @@ def _sc_dram_inline(height: int = 360) -> html.Div:
         _card([
             _section_title("DRAM & HBM — Latest Spot Prices & Year-on-Year Change"),
             tbl,
-            _source_footer(f"{SRC_PUBLISHED} (DDR4/DDR5) / {SRC_MODELED} (HBM3/HBM3E)",
+            _source_footer(f"{SRC_PUBLISHED} (DDR4/DDR5)",
                            "DDR4 8Gb 1Gx8 & DDR5 16Gb 2Gx8: transcribed from TrendForce/DRAMeXchange's free "
                            "weekly spot-price articles (USD/die) — a public release, not a licensed feed. "
-                           "HBM3 8-Hi / HBM3E 12-Hi: contract price per GB (USD/GB) — never publicly quoted, "
-                           "so this project's own estimate from secondary commentary; see the Source column "
-                           "above for the label on each row. "
-                           "⚠ Native units — DDR4/DDR5 and HBM3/HBM3E are NOT comparable in absolute terms on this "
-                           "chart; the USD/GB-normalized chart above is the like-for-like view. "
+                           "HBM3 8-Hi / HBM3E 12-Hi: WITHDRAWN 2026-08-02 — HBM contract prices are not "
+                           "publicly quoted per GB, and this project's own estimate of them was synthetic "
+                           "(BACKLOG SC-09). The series returns only when a dated primary release quotes an "
+                           "explicit figure. "
                            "YoY is anchored to each series' own latest observation, so a superseded series reports "
                            "'—' rather than a false 0.0%. "
                            "Update CURATED_DRAM_SPOT in products_config.py monthly."),
@@ -3444,13 +3604,22 @@ def _sc_enterprise_ram_section():
         height=400, xaxis_title="", yaxis_title="Price (USD / GB)",
     )
 
+    # Only shade an era whose series actually has data. After SC-09 withdrew the
+    # HBM rows, an unconditional band would paint a labelled "HBM3E Era" region
+    # with no line inside it — which reads as a rendering fault, or worse, as a
+    # series the reader failed to spot. Same §7.3 principle as the viewport bug.
+    _mem_types = set(df_mem["product_type"]) if not df_mem.empty else set()
     for (era_label, x0, x1, fill, tc, short) in HBM_ERAS:
+        if short not in _mem_types:
+            continue
         fig_price.add_vrect(
             x0=x0, x1=x1, fillcolor=fill, line_width=0,
             annotation_text=short, annotation_position="top left",
             annotation=dict(font_size=10, font_color=tc, yshift=-14),
         )
     for (ga_date, label, col) in HBM_MARKERS:
+        if not _mem_types:
+            break
         fig_price.add_vline(
             x=ga_date, line_dash="dot", line_color=col, line_width=1.5,
             annotation_text=f"◆ {label}",
@@ -4435,7 +4604,6 @@ _EXPORT_SHEET_NAMES = {
     "sc_prices":            "SC Prices",
     "sc_products":          "SC Products",
     "sc_market_share":      "SC Market Share",
-    "sc_semi_btb":          "SC Book-to-Bill",
     "sc_dram_spot":         "SC DRAM Spot",
     "sc_capacity":          "SC Fab Capacity",
     "sc_demand_indicators": "SC Demand Indicators",
@@ -4614,7 +4782,7 @@ def db_stats():
     tables = [
         "daily_prices", "quarterly_financials", "market_sentiment",
         "cycle_analysis", "company_info", "crawl_runs",
-        "sc_prices", "sc_market_share", "sc_semi_btb",
+        "sc_prices", "sc_market_share",
         "sc_dram_spot", "sc_capacity", "options_iv",
         "sc_demand_indicators",
     ]

@@ -105,5 +105,24 @@ else
     echo "=== Price data found — skipping full crawl ==="
 fi
 
+# ── Implied-volatility crawl (backgrounded, NOT in the healthcheck path) ──────
+# iv_crawler.py takes ~90s for 35 tickers (two option-chain fetches each). Adding
+# that to the seed block above would eat the healthcheckTimeout=300 window that
+# the price crawl already needs, so it runs detached: gunicorn comes up
+# immediately and IV rows land a couple of minutes later.
+#
+# This is a convenience refresh on boot, NOT the schedule. The real cadence is a
+# Railway Cron running `python iv_crawler.py` once per weekday after the US close
+# — a deploy-triggered crawl alone would leave IV stale for as long as nobody
+# redeploys. A silent failure here is caught by the options_iv freshness SLA in
+# dashboard.py `_FRESHNESS_SPEC` (4 days) and the navbar IV badge; the crawler's
+# own coverage gate refuses to write a partial snapshot.
+if [ "$VOLUME_OK" = "1" ] || [ "$SEMI_ALLOW_EPHEMERAL_SEED" = "1" ]; then
+    echo "--- Starting iv_crawler.py in the background (IV rows in ~2 min) ---"
+    python iv_crawler.py &
+else
+    echo "=== IV crawl SKIPPED — storage is ephemeral (see volume guard above) ==="
+fi
+
 # ── Start the web server ──────────────────────────────────────────────────────
 exec gunicorn dashboard:server --bind "0.0.0.0:$PORT" --workers 2 --timeout 120

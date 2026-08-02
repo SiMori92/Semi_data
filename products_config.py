@@ -10,7 +10,6 @@ Also contains pre-populated datasets sourced from earnings calls,
 TrendForce/DRAMeXchange reports, and SEMI press releases:
   · CURATED_CAPACITY  — manufacturer fab utilisation per quarter
   · CURATED_DRAM_SPOT — DRAM/HBM spot price history (per-die USD)
-  · CURATED_SEMI_BTB  — SEMI North-America equipment Book-to-Bill ratio
 
 NOTE: curated rows carry a 'source' field. Update these each quarter by
       reading the relevant earnings transcripts / SEMI press releases.
@@ -495,7 +494,16 @@ CURATED_DRAM_SPOT = [
     ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-10",   2.80, "TrendForce (public release)"),
     ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-11",   2.70, "TrendForce (public release)"),
     ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-12",   2.65, "TrendForce (public release)"),
+    # ── 2026 anchors: one row per dated TrendForce citation (BACKLOG SC-08) ───
+    # Convention: TrendForce's "Session Average" for the named chip, stamped with
+    # the observation date in `source`. This is the SAME figure the weekly
+    # [Insights] articles quote as "the average spot price of mainstream chips",
+    # so the article series and the price-page series are one series, not two.
+    # A month carries the latest observation available within it — never a
+    # month-end value inferred from a mid-month quote.
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2026-05",  32.00, "TrendForce spot (2026-05-19)"),
     ("DDR4",  "8Gb 1Gx8 die (spot)",           "2026-06",  36.00, "TrendForce spot (2026-06-30)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2026-07",  42.11, "TrendForce spot (2026-07-31)"),
     ("DDR5",  "16Gb 2Gx8 die (spot)",          "2023-01",   3.20, "TrendForce (public release)"),
     ("DDR5",  "16Gb 2Gx8 die (spot)",          "2023-06",   2.80, "TrendForce (public release)"),
     ("DDR5",  "16Gb 2Gx8 die (spot)",          "2023-12",   3.80, "TrendForce (public release)"),
@@ -511,76 +519,60 @@ CURATED_DRAM_SPOT = [
     ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-10",   6.40, "TrendForce (public release)"),
     ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-11",   6.10, "TrendForce (public release)"),
     ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-12",   5.80, "TrendForce (public release)"),
-    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2022-06",   8.50, "Modeled estimate"),
-    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2022-09",   9.00, "Modeled estimate"),
-    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2022-12",   9.50, "Modeled estimate"),
-    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2023-03",  10.00, "Modeled estimate"),
-    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2023-06",  10.80, "Modeled estimate"),
-    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2023-09",  11.50, "Modeled estimate"),
-    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2023-12",  11.80, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-01",  12.00, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-04",  13.50, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-07",  15.00, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-10",  15.80, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-01",  16.50, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-03",  17.00, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-05",  17.20, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-07",  17.40, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-09",  17.60, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-11",  17.80, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-01",  18.00, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-03",  18.20, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-05",  18.40, "Modeled estimate"),
+    # First genuine DDR5 observation since 2024-12. SC-08 assumed none was
+    # citable because the free weekly [Insights] articles quote ONLY the DDR4
+    # mainstream chip — but trendforce.com/price/dram/dram_spot publishes the
+    # full spot table (DDR5 16Gb 2Gx8 4800/5600, DDR4 8Gb/16Gb, DDR3) as
+    # server-rendered HTML with its own "Last Update" timestamp. Session Average
+    # 50.967 at 2026-07-31 18:10 GMT+8.
+    # The 2025-01 → 2026-06 hole is still real and still deliberate: this is one
+    # anchor, not a backfill. _mem_break_gaps() keeps the line broken across it.
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2026-07",  50.97, "TrendForce spot (2026-07-31)"),
+    # ─────────────────────────────────────────────────────────────────────────
+    # ⚠️  ALL 20 HBM3 / HBM3E rows were REMOVED on 2026-08-02 (BACKLOG SC-09).
+    #
+    # HBM3E ran 2024-01 → 2026-05 rising +$0.20 per two-month step, 15 steps,
+    # never once deviating ($12.00 → $18.40/GB); HBM3 before it glided the same
+    # way. That is the IDENTICAL monotonic-glide fingerprint SC-04 identified as
+    # extrapolated filler in the DDR rows and deleted on the same day. One was
+    # purged and the other left standing on the chart beside it.
+    #
+    # The "Modeled estimate" label is not a sufficient defence. SC-04 settled
+    # that a wrong number is worse than no number (CLAUDE.md §8), and honest
+    # labelling does not make a fabricated shape informative — a reader still
+    # takes direction and rate-of-change from the line.
+    #
+    # The modelled direction was also probably wrong. Public commentary through
+    # 2026 describes HBM3E contract prices *falling* from their H1-2025 peak
+    # before a mid-2026 rebound, against this series' unbroken climb.
+    #
+    # NOT backfilled: no citable anchor was found. The available figures are
+    # third-party aggregator paraphrases that contradict each other (~$13–17/GB
+    # vs "~$300 per 36 GB stack" ≈ $8.3/GB in the same article) and are not
+    # precise or primary enough to write down — the same test that stopped SC-04
+    # from recording a "mid-$40s" DDR5 paraphrase. TrendForce's 2026-06-02
+    # release is directional only ("HBM contract prices expected to surge
+    # multiples higher in 2027"), with no per-GB number.
+    #
+    # Backfill ONLY from a dated primary release quoting an explicit USD/GB or
+    # USD/stack figure, one row per citation. The HBM3/HBM3E keys stay
+    # registered in dashboard.py `_MEM_*` so the panel renders an empty group
+    # rather than raising.
+    #
+    # NOTE: CURATED_RETAIL_PRICES held the SAME fabricated series expressed per
+    # stack — 18.40 × 96 GB = 1766 and 11.80 × 48 GB = 566 reproduce those rows
+    # exactly. Both representations were removed together; deleting one would
+    # have left its twin driving the Enterprise GPU/CPU/RAM index chart.
+    # ─────────────────────────────────────────────────────────────────────────
 ]
 
 
-# ── SEMI North-America Equipment Book-to-Bill ─────────────────────────────────
-# Ratio > 1.00 = orders outpace billings (demand expanding / lead times growing)
-# Ratio < 1.00 = billings outpace orders (demand contracting)
-# Source: SEMI monthly press releases (https://www.semi.org/)
-CURATED_SEMI_BTB = [
-    ("2023-01", 0.88, "Modeled estimate — NOT a SEMI publication"),
-    ("2023-02", 0.87, "Modeled estimate — NOT a SEMI publication"),
-    ("2023-03", 0.89, "Modeled estimate — NOT a SEMI publication"),
-    ("2023-04", 0.92, "Modeled estimate — NOT a SEMI publication"),
-    ("2023-05", 0.95, "Modeled estimate — NOT a SEMI publication"),
-    ("2023-06", 0.97, "Modeled estimate — NOT a SEMI publication"),
-    ("2023-07", 0.99, "Modeled estimate — NOT a SEMI publication"),
-    ("2023-08", 1.01, "Modeled estimate — NOT a SEMI publication"),
-    ("2023-09", 1.04, "Modeled estimate — NOT a SEMI publication"),
-    ("2023-10", 1.06, "Modeled estimate — NOT a SEMI publication"),
-    ("2023-11", 1.09, "Modeled estimate — NOT a SEMI publication"),
-    ("2023-12", 1.11, "Modeled estimate — NOT a SEMI publication"),
-    ("2024-01", 1.13, "Modeled estimate — NOT a SEMI publication"),
-    ("2024-02", 1.10, "Modeled estimate — NOT a SEMI publication"),
-    ("2024-03", 1.14, "Modeled estimate — NOT a SEMI publication"),
-    ("2024-04", 1.12, "Modeled estimate — NOT a SEMI publication"),
-    ("2024-05", 1.16, "Modeled estimate — NOT a SEMI publication"),
-    ("2024-06", 1.19, "Modeled estimate — NOT a SEMI publication"),
-    ("2024-07", 1.17, "Modeled estimate — NOT a SEMI publication"),
-    ("2024-08", 1.20, "Modeled estimate — NOT a SEMI publication"),
-    ("2024-09", 1.23, "Modeled estimate — NOT a SEMI publication"),
-    ("2024-10", 1.25, "Modeled estimate — NOT a SEMI publication"),
-    ("2024-11", 1.22, "Modeled estimate — NOT a SEMI publication"),
-    ("2024-12", 1.27, "Modeled estimate — NOT a SEMI publication"),
-    ("2025-01", 1.30, "Modeled estimate — NOT a SEMI publication"),
-    ("2025-02", 1.28, "Modeled estimate — NOT a SEMI publication"),
-    ("2025-03", 1.31, "Modeled estimate — NOT a SEMI publication"),
-    ("2025-04", 1.29, "Modeled estimate — NOT a SEMI publication"),
-    ("2025-05", 1.33, "Modeled estimate — NOT a SEMI publication"),
-    ("2025-06", 1.35, "Modeled estimate — NOT a SEMI publication"),
-    ("2025-07", 1.32, "Modeled estimate — NOT a SEMI publication"),
-    ("2025-08", 1.34, "Modeled estimate — NOT a SEMI publication"),
-    ("2025-09", 1.37, "Modeled estimate — NOT a SEMI publication"),
-    ("2025-10", 1.39, "Modeled estimate — NOT a SEMI publication"),
-    ("2025-11", 1.36, "Modeled estimate — NOT a SEMI publication"),
-    ("2025-12", 1.41, "Modeled estimate — NOT a SEMI publication"),
-    ("2026-01", 1.38, "Modeled estimate — NOT a SEMI publication"),
-    ("2026-02", 1.40, "Modeled estimate — NOT a SEMI publication"),
-    ("2026-03", 1.43, "Modeled estimate — NOT a SEMI publication"),
-    ("2026-04", 1.41, "Modeled estimate — NOT a SEMI publication"),
-    ("2026-05", 1.44, "Modeled estimate — NOT a SEMI publication"),
-]
+# ── SEMI North-America Equipment Book-to-Bill — REMOVED 2026-08-02 ───────────
+# CURATED_SEMI_BTB deleted (BACKLOG SC-10). SEMI discontinued the NA Book-to-Bill
+# report after the Dec-2016 release; SC-00 relabelled the 41 rows as modeled and
+# removed the panel, but the rows kept loading and kept appearing in every
+# /api/export-xlsx workbook. The replacement is CURATED_DEMAND_INDICATORS ->
+# semi_wwsems_billings (real SEMI WWSEMS quarterly equipment billings).
 
 # ── Curated Steam Hardware Survey — GPU Installed-Base Market Share ───────────
 # Source: Valve / Steam Hardware Survey (store.steampowered.com/hwsurvey/videocard/)
@@ -1490,60 +1482,21 @@ CURATED_RETAIL_PRICES = [
     ("EPYC-9965","2026-03-01","curated",12100,None,None,None),
     ("EPYC-9965","2026-04-01","curated",12000,None,None,None),
     ("EPYC-9965","2026-05-01","curated",11900,None,None,None),
-    # ══ ENTERPRISE RAM (HBM) PER-STACK PRICE HISTORY ═════════════════════════
-    # Source: TrendForce contract price estimates × stack capacity (GB).
-    # HBM3 8-Hi 48GB stack:  price_per_GB × 48  (per CURATED_DRAM_SPOT HBM3 series)
-    # HBM3E 12-Hi 96GB stack: price_per_GB × 96 (per CURATED_DRAM_SPOT HBM3E series)
-    # ── HBM3-48GB stack prices (2022-06 → 2023-12) ───────────────────────────
-    ("HBM3-48GB","2022-06-01","curated", 408,None,None,None),
-    ("HBM3-48GB","2022-07-01","curated", 415,None,None,None),
-    ("HBM3-48GB","2022-08-01","curated", 422,None,None,None),
-    ("HBM3-48GB","2022-09-01","curated", 432,None,None,None),
-    ("HBM3-48GB","2022-10-01","curated", 440,None,None,None),
-    ("HBM3-48GB","2022-11-01","curated", 448,None,None,None),
-    ("HBM3-48GB","2022-12-01","curated", 456,None,None,None),
-    ("HBM3-48GB","2023-01-01","curated", 462,None,None,None),
-    ("HBM3-48GB","2023-02-01","curated", 471,None,None,None),
-    ("HBM3-48GB","2023-03-01","curated", 480,None,None,None),
-    ("HBM3-48GB","2023-04-01","curated", 492,None,None,None),
-    ("HBM3-48GB","2023-05-01","curated", 505,None,None,None),
-    ("HBM3-48GB","2023-06-01","curated", 518,None,None,None),
-    ("HBM3-48GB","2023-07-01","curated", 528,None,None,None),
-    ("HBM3-48GB","2023-08-01","curated", 540,None,None,None),
-    ("HBM3-48GB","2023-09-01","curated", 552,None,None,None),
-    ("HBM3-48GB","2023-10-01","curated", 558,None,None,None),
-    ("HBM3-48GB","2023-11-01","curated", 562,None,None,None),
-    ("HBM3-48GB","2023-12-01","curated", 566,None,None,None),
-    # ── HBM3E-96GB stack prices (2024-01 → 2026-05) ──────────────────────────
-    ("HBM3E-96GB","2024-01-01","curated",1152,None,None,None),
-    ("HBM3E-96GB","2024-02-01","curated",1200,None,None,None),
-    ("HBM3E-96GB","2024-03-01","curated",1248,None,None,None),
-    ("HBM3E-96GB","2024-04-01","curated",1296,None,None,None),
-    ("HBM3E-96GB","2024-05-01","curated",1368,None,None,None),
-    ("HBM3E-96GB","2024-06-01","curated",1404,None,None,None),
-    ("HBM3E-96GB","2024-07-01","curated",1440,None,None,None),
-    ("HBM3E-96GB","2024-08-01","curated",1468,None,None,None),
-    ("HBM3E-96GB","2024-09-01","curated",1492,None,None,None),
-    ("HBM3E-96GB","2024-10-01","curated",1517,None,None,None),
-    ("HBM3E-96GB","2024-11-01","curated",1534,None,None,None),
-    ("HBM3E-96GB","2024-12-01","curated",1555,None,None,None),
-    ("HBM3E-96GB","2025-01-01","curated",1584,None,None,None),
-    ("HBM3E-96GB","2025-02-01","curated",1606,None,None,None),
-    ("HBM3E-96GB","2025-03-01","curated",1632,None,None,None),
-    ("HBM3E-96GB","2025-04-01","curated",1642,None,None,None),
-    ("HBM3E-96GB","2025-05-01","curated",1651,None,None,None),
-    ("HBM3E-96GB","2025-06-01","curated",1661,None,None,None),
-    ("HBM3E-96GB","2025-07-01","curated",1670,None,None,None),
-    ("HBM3E-96GB","2025-08-01","curated",1680,None,None,None),
-    ("HBM3E-96GB","2025-09-01","curated",1690,None,None,None),
-    ("HBM3E-96GB","2025-10-01","curated",1699,None,None,None),
-    ("HBM3E-96GB","2025-11-01","curated",1709,None,None,None),
-    ("HBM3E-96GB","2025-12-01","curated",1718,None,None,None),
-    ("HBM3E-96GB","2026-01-01","curated",1728,None,None,None),
-    ("HBM3E-96GB","2026-02-01","curated",1738,None,None,None),
-    ("HBM3E-96GB","2026-03-01","curated",1747,None,None,None),
-    ("HBM3E-96GB","2026-04-01","curated",1757,None,None,None),
-    ("HBM3E-96GB","2026-05-01","curated",1766,None,None,None),
+    # ══ ENTERPRISE RAM (HBM) PER-STACK PRICE HISTORY — WITHDRAWN 2026-08-02 ═══
+    # All 48 HBM3-48GB / HBM3E-96GB rows removed (BACKLOG SC-09).
+    #
+    # These were not an independent observation. The retired header stated the
+    # construction outright: "TrendForce contract price estimates x stack
+    # capacity (GB)" — i.e. CURATED_DRAM_SPOT's per-GB series multiplied by 48
+    # or 96. Verified: 11.80 x 48 = 566 and 18.40 x 96 = 1766 reproduce the
+    # final row of each block exactly. It is the same fabricated monotonic
+    # glide, re-expressed per stack, and it fed the Enterprise GPU/CPU/RAM
+    # index chart as though it were a second corroborating source.
+    #
+    # Deleting only the per-GB series would have left this twin driving a chart,
+    # so both went together. Restore ONLY from a dated primary release quoting
+    # an explicit USD/stack or USD/GB figure — never by multiplying one modeled
+    # series by a constant and presenting the product as a separate series.
     # ── GPU (legacy): RTX-3090 — 2021-06 to 2022-12 (5Y coverage) ────────────
     # Ampere MSRP $1499 (Sep 2020); crypto-premium era then rapid normalisation
     ("RTX-3090","2021-06-01","curated",2200,None,None,None),

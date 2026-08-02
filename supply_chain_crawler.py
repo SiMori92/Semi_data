@@ -37,7 +37,6 @@ from products_config import (
     CURATED_DEMAND_INDICATORS,
     CURATED_DRAM_SPOT,
     CURATED_RETAIL_PRICES,
-    CURATED_SEMI_BTB,
     CURATED_STEAM_SURVEY,
     ENTERPRISE_PRODUCT_LAUNCHES,
     GPU_PRODUCTS,
@@ -112,12 +111,10 @@ def init_supply_chain_db(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (model_name, period)
         );
 
-        -- Order Volume indicator (SEMI NA Equipment Book-to-Bill)
-        CREATE TABLE IF NOT EXISTS sc_semi_btb (
-            period          TEXT    PRIMARY KEY,    -- YYYY-MM
-            btb_ratio       REAL,
-            source          TEXT
-        );
+        -- sc_semi_btb was DROPPED 2026-08-02 (BACKLOG SC-10) — see the drop
+        -- statement after this script. Do not re-create it: the SEMI NA
+        -- Book-to-Bill report was discontinued after Dec-2016 and the
+        -- replacement is sc_demand_indicators[semi_wwsems_billings].
 
         -- DRAM / HBM spot prices
         CREATE TABLE IF NOT EXISTS sc_dram_spot (
@@ -164,6 +161,32 @@ def init_supply_chain_db(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (indicator_key, period)
         );
     """)
+
+    # BACKLOG SC-10 — drop the retired SEMI NA Book-to-Bill table.
+    #
+    # SC-00 removed its panel and relabelled its 41 rows as modeled estimates, but
+    # the rows kept loading on every deploy and kept appearing as a sheet in every
+    # /api/export-xlsx workbook — a decade-dead indicator handed to readers with no
+    # disclaimer attached to the file. Nothing in dashboard.py reads this table
+    # (verified by grep before dropping), and it is deliberately absent from
+    # _FRESHNESS_SPEC, so it was also unmonitored.
+    #
+    # Safe to drop rather than deprecate: every row originated in CURATED_SEMI_BTB,
+    # which lives in git history, so this is fully reproducible — unlike the scraped
+    # sc_prices / options_iv_history series, which are not (CLAUDE.md §5.1).
+    # Idempotent: a no-op once the table is gone.
+    _btb = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sc_semi_btb'"
+    ).fetchone()[0]
+    if _btb:
+        n = conn.execute("SELECT COUNT(*) FROM sc_semi_btb").fetchone()[0]
+        conn.execute("DROP TABLE sc_semi_btb")
+        log.warning(
+            "Dropped retired table sc_semi_btb (%d rows) — SEMI discontinued the NA "
+            "Book-to-Bill report after Dec-2016; replacement is "
+            "sc_demand_indicators[semi_wwsems_billings]. See BACKLOG SC-10.", n
+        )
+
     conn.commit()
     log.info("Supply-chain DB tables ready.")
 
@@ -197,6 +220,13 @@ def load_product_catalog(conn: sqlite3.Connection) -> None:
     log.info("Product catalog loaded — %d products.", len(rows))
 
 
+# Source tag for rows written by crawl_trendforce_spot(). Must be an EXACT,
+# stable string: load_curated_dram_spot()'s reconcile uses equality on it to
+# decide what not to delete. Changing this string without changing that query
+# deletes every live row on the next deploy.
+SRC_LIVE_SPOT = "TrendForce spot page (live)"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # CURATED DATA LOADERS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -211,12 +241,52 @@ def load_curated_capacity(conn: sqlite3.Connection) -> None:
 
 
 def load_curated_dram_spot(conn: sqlite3.Connection) -> None:
+    """
+    Load CURATED_DRAM_SPOT, then RECONCILE — delete any sc_dram_spot row whose
+    (product_type, spec_label, period) key is no longer in the curated list.
+
+    Why the delete is mandatory (BACKLOG SC-14):
+    INSERT OR REPLACE propagates *corrections* but never *withdrawals*. SC-04
+    deleted 34 falsified DDR rows from products_config.py on 2026-08-02; because
+    this loader only inserted, those rows survived on the Railway volume — prod
+    reported 87 sc_dram_spot rows against 53 defined in git. The retraction was a
+    no-op in production while reading as done in the repo, which is the worst
+    possible combination: the falsified series stayed on the chart.
+
+    SCOPE (changed by SC-15 — read before editing): sc_dram_spot is no longer
+    100 % curated. crawl_trendforce_spot() writes live rows tagged SRC_LIVE_SPOT,
+    and those keys are deliberately absent from CURATED_DRAM_SPOT. The delete is
+    therefore scoped to exclude them — an unscoped reconcile would wipe every
+    live observation on the next deploy, because startup.sh runs --curated-only
+    on every boot. This is the same scoping `load_curated_retail_prices()` needs
+    for its PassMark/Newegg writers.
+    """
     conn.executemany(
         "INSERT OR REPLACE INTO sc_dram_spot VALUES (?,?,?,?,?)",
         CURATED_DRAM_SPOT,
     )
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS _dram_keep (pt TEXT, sl TEXT, pd TEXT)")
+    conn.execute("DELETE FROM _dram_keep")
+    conn.executemany(
+        "INSERT INTO _dram_keep VALUES (?,?,?)",
+        [(r[0], r[1], r[2]) for r in CURATED_DRAM_SPOT],
+    )
+    n = conn.execute(
+        """
+        DELETE FROM sc_dram_spot
+         WHERE COALESCE(source, '') <> ?
+           AND (product_type, spec_label, period) NOT IN
+               (SELECT pt, sl, pd FROM _dram_keep)
+        """,
+        (SRC_LIVE_SPOT,),
+    ).rowcount
     conn.commit()
     log.info("DRAM spot prices loaded — %d rows.", len(CURATED_DRAM_SPOT))
+    if n:
+        log.warning(
+            "Reconciled sc_dram_spot — deleted %d withdrawn row(s) no longer in "
+            "CURATED_DRAM_SPOT (see BACKLOG SC-14).", n
+        )
 
 
 def load_curated_retail_prices(conn: sqlite3.Connection) -> None:
@@ -226,13 +296,41 @@ def load_curated_retail_prices(conn: sqlite3.Connection) -> None:
     depth that PassMark/Newegg live crawls cannot provide (live crawls only record
     the current day's price).  Existing curated rows are replaced on each run so
     corrections in products_config.py propagate automatically.
+
+    Then RECONCILE, scoped to source='curated' (BACKLOG SC-14 / SC-09):
+    INSERT OR REPLACE propagates corrections but not withdrawals, so a row deleted
+    from CURATED_RETAIL_PRICES would otherwise survive on the Railway volume
+    forever — which is exactly how SC-04's DRAM retraction became a no-op in prod.
+
+    The source='curated' scope is MANDATORY and not a stylistic choice. Unlike
+    sc_dram_spot, this table has live writers: crawl_passmark() and crawl_newegg()
+    insert rows that appear nowhere in products_config.py. An unscoped reconcile
+    here would delete every live-scraped price on the next deploy.
     """
     conn.executemany(
         "INSERT OR REPLACE INTO sc_prices VALUES (?,?,?,?,?,?,?)",
         CURATED_RETAIL_PRICES,
     )
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS _retail_keep (mid TEXT, dt TEXT)")
+    conn.execute("DELETE FROM _retail_keep")
+    conn.executemany(
+        "INSERT INTO _retail_keep VALUES (?,?)",
+        [(r[0], r[1]) for r in CURATED_RETAIL_PRICES],
+    )
+    n = conn.execute(
+        """
+        DELETE FROM sc_prices
+         WHERE source = 'curated'
+           AND (model_id, date) NOT IN (SELECT mid, dt FROM _retail_keep)
+        """
+    ).rowcount
     conn.commit()
     log.info("Curated retail prices loaded — %d rows.", len(CURATED_RETAIL_PRICES))
+    if n:
+        log.warning(
+            "Reconciled sc_prices[curated] — deleted %d withdrawn row(s) no longer in "
+            "CURATED_RETAIL_PRICES (see BACKLOG SC-14). Live scraped rows untouched.", n
+        )
 
 
 def purge_null_price_rows(conn: sqlite3.Connection) -> None:
@@ -252,16 +350,6 @@ def purge_null_price_rows(conn: sqlite3.Connection) -> None:
     conn.commit()
     if n:
         log.warning("Purged %d contentless sc_prices rows (NULL price + NULL score).", n)
-
-
-def load_curated_semi_btb(conn: sqlite3.Connection) -> None:
-    conn.executemany(
-        "INSERT OR REPLACE INTO sc_semi_btb VALUES (?,?,?)",
-        CURATED_SEMI_BTB,
-    )
-    conn.commit()
-    log.info("B2B data loaded — %d rows (MODELLED ESTIMATES, not a SEMI publication; "
-             "see BACKLOG SC-00).", len(CURATED_SEMI_BTB))
 
 
 def load_curated_demand_indicators(conn: sqlite3.Connection) -> None:
@@ -824,31 +912,165 @@ def crawl_umc_revenue(conn: sqlite3.Connection) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LIVE SOURCE 5 — RETIRED: SEMI NA Book-to-Bill (see BACKLOG SC-00)
+# LIVE SOURCE 5 — TrendForce DRAM spot price page (BACKLOG SC-15)
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# SEMI discontinued the North American Semiconductor Equipment Book-to-Bill
-# report after the DECEMBER 2016 report; the NA billings press release also
-# ceased in Feb-2022.  The former scraper here searched semi.org for a monthly
-# "book to bill" press release that has not existed for ~9 years, failed
-# silently every run, and left the hand-modelled CURATED_SEMI_BTB rows in place
-# looking like live data.
+# Precondition checked on 2026-08-02 before a line of this was written (the SC-06
+# rule): trendforce.com/price/dram/dram_spot returns a SERVER-RENDERED HTML table
+# — Item / Daily High / Daily Low / Session High / Session Low / Session Average /
+# Session Change — with its own "Last Update YYYY-MM-DD HH:MM (GMT+8)" stamp. No
+# JS execution needed, unlike Steam (SC-02) or Newegg (SC-01).
 #
-# The live capex/order signal that DOES exist is the SEMI/SEAJ Worldwide
-# Semiconductor Equipment Market Statistics (WWSEMS) QUARTERLY billings report
-# (e.g. Q1 2026: $36.55B, +14% YoY).  Wiring that up is BACKLOG SC-00 fix B and
-# needs a new `sc_equipment_billings` table — a schema change, which requires
-# sign-off per CLAUDE.md §1 step 7.  Until then this is a no-op stub: better an
-# empty series than an invented one.
+# Why this matters: TrendForce's free weekly [Insights] articles quote ONLY the
+# DDR4 mainstream chip, which is why SC-08 could not close the DDR5 hole from
+# them. This page carries DDR5 too, so it is the source that actually fixes the
+# coverage gap rather than reporting it.
+#
+# The page also carries DDR4 16Gb, both eTT grades, DDR3, contract, module, GDDR
+# and LPDDR tables. Only the two series that already exist in CURATED_DRAM_SPOT
+# are captured — adding a new product_type means new _MEM_DIE_GB / _MEM_SPECS /
+# _MEM_COLORS / _MEM_ORDER / _SC_DRAM_SLA entries in dashboard.py, and a missing
+# _MEM_DIE_GB key silently understates $/GB (CLAUDE.md §9). Extend deliberately.
+
+_SPOT_URL = "https://www.trendforce.com/price/dram/dram_spot"
+
+# Page label → (product_type, spec_label). The spec_label MUST match the curated
+# rows exactly or the live data forks into a parallel series that shares a chart
+# with its own history and looks like two products.
+_SPOT_ITEMS = {
+    "DDR5 16Gb (2Gx8) 4800/5600": ("DDR5", "16Gb 2Gx8 die (spot)"),
+    "DDR4 8Gb (1Gx8) 3200":       ("DDR4", "8Gb 1Gx8 die (spot)"),
+}
+
+# "Last Update 2026-07-31 18:10 (GMT+8)" — the page's own timestamp, never
+# datetime.now(). A crawler that stamps rows with the time it ran reports itself
+# as fresh even when the publisher has gone quiet; that is precisely how the
+# Steam survey sat frozen for 17 months (SC-02).
+_SPOT_ASOF_RE = re.compile(r"Last Update\s+(\d{4})-(\d{2})-(\d{2})\s+[\d:]+")
+
+# Row shape after get_text("\n"): label, then 5 numeric cells, the 6th being the
+# Session Average we want. Session Average is the same figure the weekly
+# [Insights] articles quote as "the average spot price of mainstream chips", so
+# the live series and the curated 2026 anchors are one series (verified: the
+# 2026-06-30 article's US$36.00 equals this column on that date).
+_SPOT_NUM = r"\s*[\d,]+\.?\d*\s*\n+"
 
 
-def crawl_semi_btb(conn: sqlite3.Connection) -> None:
-    """No-op. The source report was discontinued in 2016 — see the note above."""
-    log.info(
-        "SEMI B2B — crawler retired: the NA Book-to-Bill report was discontinued "
-        "after Dec-2016. Existing sc_semi_btb rows are MODELLED ESTIMATES, not SEMI "
-        "data. Replacement = SEMI WWSEMS quarterly billings (BACKLOG SC-00)."
+def _spot_row_re(label: str):
+    """Regex for one spot row: label, 4 skipped numeric cells, then the 5th
+    (Session Average) captured. Built as an explicit concatenation — writing this
+    as `r"..." r"..." * 4` silently repeats the LABEL instead of the numeric cell,
+    because implicit string concatenation binds tighter than `*`."""
+    return re.compile(
+        re.escape(label) + r"\s*\n+" + (_SPOT_NUM * 4) + r"\s*([\d,]+\.?\d*)\s*\n"
     )
+
+
+def _parse_trendforce_spot(text: str) -> tuple:
+    """
+    Parse the DRAM Spot Price table. Returns (period, asof, [(pt, spec, price)]).
+
+    Bounded to the spot section: the page renders four tables (spot, contract,
+    module, GDDR) and EACH has its own "Last Update" line, so an unbounded search
+    can pair spot prices with the contract table's timestamp. Same class of bug as
+    reading Steam's per-DirectX tables instead of "ALL VIDEO CARDS" (SC-02).
+    """
+    start = text.find("DRAM Spot Price")
+    end   = text.find("DRAM Contract Price", start + 1) if start >= 0 else -1
+    if start < 0:
+        return None, None, []
+    section = text[start:end] if end > start else text[start:]
+
+    m = _SPOT_ASOF_RE.search(section)
+    if not m:
+        return None, None, []
+    y, mo, d = m.group(1), m.group(2), m.group(3)
+    period, asof = f"{y}-{mo}", f"{y}-{mo}-{d}"
+
+    out = []
+    for label, (ptype, spec) in _SPOT_ITEMS.items():
+        hit = _spot_row_re(label).search(section)
+        if not hit:
+            continue
+        try:
+            price = float(hit.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        if price > 0:                      # never persist a contentless row (SC-01)
+            out.append((ptype, spec, price))
+    return period, asof, out
+
+
+def crawl_trendforce_spot(conn: sqlite3.Connection) -> None:
+    """
+    Store the current DRAM spot session averages for the series we already track.
+
+    Validation gate before writing (SC-01/SC-02 lesson): a parse that finds
+    nothing, cannot read the page's timestamp, or returns a price wildly off the
+    last stored value for that series must NEVER overwrite good data and must
+    never fail silently. Rejection keeps existing rows and logs ERROR.
+    """
+    try:
+        r = requests.get(_SPOT_URL, timeout=20,
+                         headers={"User-Agent": "Mozilla/5.0 (compatible; semi-tracker/1.0)"})
+        r.raise_for_status()
+        text = BeautifulSoup(r.text, "html.parser").get_text("\n")
+    except Exception as exc:
+        log.error("TrendForce spot page fetch FAILED (%s) — no rows written.", exc)
+        return
+
+    period, asof, rows = _parse_trendforce_spot(text)
+
+    problems = []
+    if not period:
+        problems.append("'Last Update' timestamp not found in the spot section")
+    if len(rows) < len(_SPOT_ITEMS):
+        problems.append(f"only {len(rows)}/{len(_SPOT_ITEMS)} tracked series parsed")
+
+    # Magnitude check against the last stored value per series. The falsified DDR
+    # rows (SC-04) ran ~18x off the real market for 17 months with every status
+    # surface green; a bounds check is cheap and would have caught it on day one.
+    for ptype, spec, price in rows:
+        prev = conn.execute(
+            "SELECT price_usd FROM sc_dram_spot WHERE product_type=? AND spec_label=? "
+            "AND price_usd IS NOT NULL ORDER BY period DESC LIMIT 1",
+            (ptype, spec),
+        ).fetchone()
+        if prev and prev[0] and not (prev[0] / 10.0 <= price <= prev[0] * 10.0):
+            problems.append(f"{ptype} {price} is >10x from last stored {prev[0]}")
+
+    if problems:
+        log.error(
+            "TRENDFORCE SPOT PARSE REJECTED (%s) — page layout has likely changed. "
+            "Existing rows retained; see BACKLOG SC-15.", "; ".join(problems),
+        )
+        return
+
+    conn.executemany(
+        "INSERT OR REPLACE INTO sc_dram_spot VALUES (?,?,?,?,?)",
+        [(pt, spec, period, price, SRC_LIVE_SPOT) for pt, spec, price in rows],
+    )
+    conn.commit()
+    log.info("TrendForce spot — %d series stored for %s (as of %s): %s",
+             len(rows), period, asof,
+             ", ".join(f"{pt} ${p:.2f}" for pt, _, p in rows))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# REMOVED — SEMI NA Book-to-Bill (BACKLOG SC-00 → SC-10)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# SEMI discontinued the North American Semiconductor Equipment Book-to-Bill report
+# after the DECEMBER 2016 report; the NA billings press release ceased Feb-2022.
+# The former scraper searched semi.org for a release that had not existed for ~9
+# years, failed silently every run, and left hand-modelled rows looking live.
+#
+# SC-00 retired the scraper to a no-op stub; SC-10 removed the stub, the loader,
+# CURATED_SEMI_BTB, and the table itself (dropped in init_supply_chain_db()).
+#
+# The replacement is LIVE: sc_demand_indicators[semi_wwsems_billings] carries real
+# SEMI WWSEMS quarterly equipment billings. Do not re-add a Book-to-Bill series —
+# there is no publication behind it.
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -871,7 +1093,6 @@ def crawl_supply_chain(quick: bool = False, curated_only: bool = False) -> None:
     log.info("─── Step 2: Load curated capacity & DRAM data ──────────────")
     load_curated_capacity(conn)
     load_curated_dram_spot(conn)
-    load_curated_semi_btb(conn)
     load_curated_retail_prices(conn)
     load_curated_steam_survey(conn)   # seed Steam data; live crawl may overwrite
     load_curated_demand_indicators(conn)  # seed demand data; TSMC/UMC live crawl may overwrite
@@ -893,7 +1114,7 @@ def crawl_supply_chain(quick: bool = False, curated_only: bool = False) -> None:
 
     crawl_steam_survey(conn)
     time.sleep(REQUEST_DELAY_SECONDS)
-    crawl_semi_btb(conn)
+    crawl_trendforce_spot(conn)
     time.sleep(REQUEST_DELAY_SECONDS)
     crawl_tsmc_revenue(conn)
     time.sleep(REQUEST_DELAY_SECONDS)
@@ -911,7 +1132,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Semiconductor Supply Chain Crawler")
     parser.add_argument(
         "--quick", action="store_true",
-        help="Skip PassMark/Newegg scraping; still runs Steam + SEMI BTB network calls.",
+        help="Skip PassMark/Newegg scraping; still runs Steam / TrendForce spot / "
+             "TSMC / UMC network calls.",
+    )
+    parser.add_argument(
+        "--spot-only", action="store_true",
+        help="Run ONLY the TrendForce DRAM spot crawl (BACKLOG SC-15). Use this to "
+             "verify the parser against the live page after a layout change without "
+             "touching any other source.",
     )
     parser.add_argument(
         "--curated-only", action="store_true",
@@ -919,4 +1147,10 @@ if __name__ == "__main__":
              "Safe to run on every deploy — idempotent via INSERT OR REPLACE.",
     )
     args = parser.parse_args()
-    crawl_supply_chain(quick=args.quick, curated_only=args.curated_only)
+    if args.spot_only:
+        _conn = get_conn()
+        init_supply_chain_db(_conn)
+        crawl_trendforce_spot(_conn)
+        _conn.close()
+    else:
+        crawl_supply_chain(quick=args.quick, curated_only=args.curated_only)
