@@ -458,102 +458,81 @@ CURATED_CAPACITY = [
 # HBM3E prices are per-GB contract estimates.
 # Format: (product_type, spec_label, period_YYYY-MM, price_usd, source)
 CURATED_DRAM_SPOT = [
-    # ── DDR4 8Gb benchmark die ────────────────────────────────────────────────
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-01", 1.20, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-03", 1.05, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-06", 0.92, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-09", 1.10, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2023-12", 1.40, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-01", 1.65, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-02", 1.85, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-03", 2.05, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-04", 2.30, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-05", 2.55, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-06", 2.75, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-07", 2.90, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-08", 3.05, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-09", 2.95, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-10", 2.80, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-11", 2.70, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2024-12", 2.65, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-01", 2.60, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-02", 2.55, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-03", 2.50, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-04", 2.48, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-05", 2.45, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-06", 2.40, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-07", 2.35, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-08", 2.30, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-09", 2.25, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-10", 2.20, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-11", 2.15, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2025-12", 2.12, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-01", 2.10, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-02", 2.08, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-03", 2.06, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-04", 2.04, "TrendForce (public release)"),
-    ("DDR4", "8Gb 1Gx8 die (spot)",  "2026-05", 2.02, "TrendForce (public release)"),
-
-    # ── DDR5 16Gb benchmark die ───────────────────────────────────────────────
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2023-01", 3.20, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2023-06", 2.80, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2023-12", 3.80, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-01", 4.10, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-02", 4.40, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-03", 4.80, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-04", 5.20, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-05", 5.70, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-06", 6.10, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-07", 6.70, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-08", 7.00, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-09", 6.80, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-10", 6.40, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-11", 6.10, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2024-12", 5.80, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-01", 5.60, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-02", 5.40, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-03", 5.30, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-04", 5.20, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-05", 5.15, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-06", 5.05, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-07", 4.95, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-08", 4.85, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-09", 4.75, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-10", 4.65, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-11", 4.55, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2025-12", 4.48, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-01", 4.40, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-02", 4.32, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-03", 4.25, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-04", 4.18, "TrendForce (public release)"),
-    ("DDR5", "16Gb 2Gx8 die (spot)", "2026-05", 4.12, "TrendForce (public release)"),
-
-    # ── HBM3 contract price per GB (8-Hi stack, 2022-06 → 2023-12) ──────────────
-    # SK Hynix was sole initial supplier; Samsung qualified late 2022.
-    # Prices climbed steadily into 2023 as H100 ramp drove hyperscaler demand.
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2022-06",  8.50, "Modeled estimate"),
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2022-09",  9.00, "Modeled estimate"),
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2022-12",  9.50, "Modeled estimate"),
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2023-03", 10.00, "Modeled estimate"),
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2023-06", 10.80, "Modeled estimate"),
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2023-09", 11.50, "Modeled estimate"),
-    ("HBM3", "HBM3 8-Hi contract (per GB)",   "2023-12", 11.80, "Modeled estimate"),
-
-    # ── HBM3E contract price per GB ───────────────────────────────────────────
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-01", 12.00, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-04", 13.50, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-07", 15.00, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-10", 15.80, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-01", 16.50, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-03", 17.00, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-05", 17.20, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-07", 17.40, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-09", 17.60, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-11", 17.80, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-01", 18.00, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-03", 18.20, "Modeled estimate"),
-    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-05", 18.40, "Modeled estimate"),
+    # ─────────────────────────────────────────────────────────────────────────
+    # ⚠️  DDR4/DDR5 rows for 2025-01 → 2026-05 were REMOVED on 2026-08-02.
+    #
+    # Those 34 rows decayed in near-perfect lockstep (-1% to -2% every single
+    # month for 17 consecutive months, never once reversing) while the real
+    # market did the opposite: TrendForce reported conventional DRAM contract
+    # prices +93–98% QoQ in 1Q26 and DRAM industry revenue +81% QoQ to $97B
+    # (2026-06-01), with DDR4 1Gx8 3200 spot at US$36.00 on 2026-06-30 against
+    # the US$2.02 this table claimed for 2026-05 — an ~18x error, sign
+    # inverted, all of it labelled SRC_PUBLISHED "TrendForce (public release)".
+    # No spot series moves in a smooth monotonic glide; that shape is synthetic.
+    #
+    # They are deleted rather than relabelled: a wrong number is worse than no
+    # number (CLAUDE.md §8). The resulting 2025-01 → 2026-05 gap is deliberate
+    # and honest — we do not know those values. Backfill ONLY from dated
+    # TrendForce releases, one row per citation. See BACKLOG SC-04.
+    #
+    # Rows ≤ 2024-12 are retained: their month-to-month moves are irregular and
+    # plausible for their era, consistent with genuine transcription.
+    # ─────────────────────────────────────────────────────────────────────────
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2023-01",   1.20, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2023-03",   1.05, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2023-06",   0.92, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2023-09",   1.10, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2023-12",   1.40, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-01",   1.65, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-02",   1.85, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-03",   2.05, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-04",   2.30, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-05",   2.55, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-06",   2.75, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-07",   2.90, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-08",   3.05, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-09",   2.95, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-10",   2.80, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-11",   2.70, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2024-12",   2.65, "TrendForce (public release)"),
+    ("DDR4",  "8Gb 1Gx8 die (spot)",           "2026-06",  36.00, "TrendForce spot (2026-06-30)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2023-01",   3.20, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2023-06",   2.80, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2023-12",   3.80, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-01",   4.10, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-02",   4.40, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-03",   4.80, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-04",   5.20, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-05",   5.70, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-06",   6.10, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-07",   6.70, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-08",   7.00, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-09",   6.80, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-10",   6.40, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-11",   6.10, "TrendForce (public release)"),
+    ("DDR5",  "16Gb 2Gx8 die (spot)",          "2024-12",   5.80, "TrendForce (public release)"),
+    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2022-06",   8.50, "Modeled estimate"),
+    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2022-09",   9.00, "Modeled estimate"),
+    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2022-12",   9.50, "Modeled estimate"),
+    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2023-03",  10.00, "Modeled estimate"),
+    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2023-06",  10.80, "Modeled estimate"),
+    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2023-09",  11.50, "Modeled estimate"),
+    ("HBM3",  "HBM3 8-Hi contract (per GB)",   "2023-12",  11.80, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-01",  12.00, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-04",  13.50, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-07",  15.00, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2024-10",  15.80, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-01",  16.50, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-03",  17.00, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-05",  17.20, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-07",  17.40, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-09",  17.60, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2025-11",  17.80, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-01",  18.00, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-03",  18.20, "Modeled estimate"),
+    ("HBM3E", "HBM3E 12-Hi contract (per GB)", "2026-05",  18.40, "Modeled estimate"),
 ]
+
 
 # ── SEMI North-America Equipment Book-to-Bill ─────────────────────────────────
 # Ratio > 1.00 = orders outpace billings (demand expanding / lead times growing)

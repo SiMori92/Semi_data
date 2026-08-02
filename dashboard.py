@@ -143,7 +143,11 @@ _FRESHNESS_SPEC = {
     "quarterly_financials": ("period_end",    "date",    120),
     "options_iv":           ("snapshot_date", "date",      4),
     "sc_dram_spot":         ("period",        "month",    45),
-    "sc_semi_btb":          ("period",        "month",    45),
+    # sc_semi_btb is intentionally ABSENT: the panel was removed in SC-00 fix B
+    # and the table is a dead no-op kept only to avoid a rename migration (§7
+    # rule 2). Monitoring a table nothing renders would fire forever and teach
+    # the reader to ignore the badge. Unmonitored is correct here — but it is
+    # the ONLY table for which that is true.
     # 120d, not 60d: Valve publishes the survey with a 1–3 month lag, and this
     # SLA must agree with the "As of" badge in _sc_steam_panel() (red at 4+
     # months). Two surfaces disagreeing about the same table is how a real
@@ -164,8 +168,12 @@ _SC_DEMAND_SLA = {
     "tsmc_revenue":           40,   # monthly, published ~10th
     "umc_revenue":            40,
     "korea_chip_exports_20d": 20,   # ~3x/month
-    "wsts_billings":          45,
-    "semi_wwsems_billings":  110,   # quarterly
+    # SLAs are calibrated to each publisher's ACTUAL lag, not to how recent we
+    # would like the data to be. A badge that fires while the publisher simply
+    # hasn't released yet trains the reader to ignore it (BACKLOG SC-04).
+    "wsts_billings":          75,   # monthly, WSTS/SIA release ~2 months in arrears
+    "semi_wwsems_billings":  160,   # quarterly; Q1-2026 landed 2026-06-04 = Q+65d,
+                                    # so Q2 is not due until ~early September
 }
 _SC_DEMAND_KIND = {
     "semi_wwsems_billings": "quarter",
@@ -2132,6 +2140,40 @@ def _mem_normalize_usd_per_gb(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values(["product_type", "period"])
 
 
+_MEM_GAP_MONTHS = 3
+
+
+def _mem_break_gaps(grp: pd.DataFrame, gap_months: int = _MEM_GAP_MONTHS) -> pd.DataFrame:
+    """Insert a NaN row wherever a series skips more than `gap_months`.
+
+    Plotly joins consecutive points regardless of the distance between them, so a
+    series with a hole reads as a smooth move across the hole. `sc_dram_spot` has
+    exactly that shape after the fabricated 2025-01 → 2026-05 DDR rows were
+    withdrawn (BACKLOG SC-04): DDR4 runs 2024-12 ($2.65) then 2026-06 ($36.00),
+    and an unbroken line between them would draw an 18-month climb that never
+    happened. The NaN forces Plotly to lift the pen — the gap stays visible as a
+    gap, which is the honest rendering of "we do not know".
+    """
+    grp = grp.sort_values("period_dt")
+    if len(grp) < 2:
+        return grp
+    out, prev = [], None
+    for _, row in grp.iterrows():
+        if prev is not None:
+            months = ((row["period_dt"].year - prev["period_dt"].year) * 12
+                      + row["period_dt"].month - prev["period_dt"].month)
+            if months > gap_months:
+                blank = prev.copy()
+                blank["period_dt"] = prev["period_dt"] + pd.DateOffset(months=1)
+                for c in ("price_usd", "price_usd_gb"):
+                    if c in blank.index:
+                        blank[c] = float("nan")
+                out.append(blank)
+        out.append(row)
+        prev = row
+    return pd.DataFrame(out)
+
+
 def _mem_yoy(grp: pd.DataFrame, price_col: str = "price_usd_gb"):
     """Year-on-year change anchored to the SERIES' own latest period.
 
@@ -2142,12 +2184,20 @@ def _mem_yoy(grp: pd.DataFrame, price_col: str = "price_usd_gb"):
     (HBM3 stops at 2023-12) otherwise matches its own final row as the "1Y ago"
     price and reports a fabricated +0.0%.
     """
-    grp = grp.sort_values("period_dt")
+    grp = grp.sort_values("period_dt").dropna(subset=[price_col])
+    if grp.empty:
+        return None, None, None
     latest = grp.iloc[-1]
     target = latest["period_dt"] - pd.DateOffset(months=12)
-    # Accept an anchor within a 12–18 month lookback; anything older is not a
+    # Accept an anchor within a 12–15 month lookback; anything older is not a
     # year-on-year comparison and is reported as "—".
-    floor = latest["period_dt"] - pd.DateOffset(months=18)
+    #
+    # The floor was 18 months and had to be tightened (BACKLOG SC-04): after the
+    # fabricated 2025-01 → 2026-05 DDR rows were withdrawn, DDR4's nearest anchor
+    # to its 2026-06 reading was 2024-12 — exactly 18 months back, so it passed
+    # and the table printed "+1258.5% YoY" for what is an 18-month move. A 15-
+    # month ceiling still admits the bi-monthly HBM series while rejecting that.
+    floor = latest["period_dt"] - pd.DateOffset(months=15)
     prior = grp[(grp["period_dt"] <= target) & (grp["period_dt"] >= floor)]
     if prior.empty:
         return latest, None, None
@@ -2727,13 +2777,16 @@ def _sc_dram_inline(height: int = 360) -> html.Div:
     df["price_usd"] = pd.to_numeric(df["price_usd"], errors="coerce")
     df = df.sort_values("period")
 
+    df["period_dt"] = pd.to_datetime(df["period"].astype(str).str[:7] + "-01")
+
     fig = go.Figure()
     for ptype in [p for p in _MEM_ORDER if p in set(df["product_type"])]:
         grp  = df[df["product_type"] == ptype]
         unit = _MEM_UNIT_LABEL.get(ptype, "USD")
         for spec, sub in grp.groupby("spec_label"):
+            sub = _mem_break_gaps(sub)      # never draw across a hole — SC-04
             fig.add_trace(go.Scatter(
-                x=sub["period"], y=sub["price_usd"],
+                x=sub["period_dt"], y=sub["price_usd"],
                 name=f"{ptype} — {spec}",
                 mode="lines+markers",
                 line=dict(width=2, color=_MEM_COLORS.get(ptype, ACCENT)),
@@ -2824,9 +2877,27 @@ def _sc_dram_inline(height: int = 360) -> html.Div:
         style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "10px"},
     )
 
+    # Withdrawn-data disclosure. The DDR series has a deliberate 17-month hole;
+    # without saying so, a reader sees a broken line and assumes a rendering bug
+    # rather than a data decision. (BACKLOG SC-04)
+    dram_gap_note = html.Div(
+        "⚠️ DDR4/DDR5 data for Jan 2025 – May 2026 has been WITHDRAWN, not lost. Those rows "
+        "decayed ~1–2% every month for 17 straight months while TrendForce reported "
+        "conventional DRAM contract prices rising 93–98% QoQ in 1Q26 — the series was "
+        "synthetic and is now deleted rather than shown. The break in the line is the gap; "
+        "the 2024 and 2026 points are not continuous. Backfill only from dated TrendForce "
+        "releases (BACKLOG SC-04).",
+        style={
+            "color": YELLOW, "fontSize": "11px", "fontWeight": "600",
+            "border": f"1px solid {YELLOW}", "borderRadius": "4px",
+            "padding": "6px 10px", "marginBottom": "10px",
+        },
+    )
+
     return html.Div([
         _card([
             _section_title("DRAM & HBM Spot / Contract Prices"),
+            dram_gap_note,
             dram_note,
             dcc.Graph(figure=fig, config={"displayModeBar": True}),
         ]),
@@ -3350,6 +3421,7 @@ def _sc_enterprise_ram_section():
     if not df_mem.empty:
         for ptype in [p for p in _MEM_ORDER if p in set(df_mem["product_type"])]:
             grp = df_mem[df_mem["product_type"] == ptype].sort_values("period_dt")
+            grp = _mem_break_gaps(grp)      # never draw across a hole — SC-04
             spec = _MEM_SPECS.get(ptype, {})
             col  = _MEM_COLORS.get(ptype, CHART_COLORS[0])
             is_hbm = spec.get("class") == "HBM"
