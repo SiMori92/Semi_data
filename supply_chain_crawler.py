@@ -435,11 +435,14 @@ def purge_rank_as_price_rows(conn: sqlite3.Connection) -> None:
     the writer reads as complete in git while production stays wrong. Runs from
     --curated-only on every boot, exactly like purge_null_price_rows().
 
-    Detection is per scrape-date, not per row, because the defect is a property
-    of the scrape: within one date the whole price column is either prices or
-    ranks. A date is condemned when its non-null prices are near-perfectly
-    inverse to score (rho <= -0.90) — the same test the write-side gate applies,
-    deliberately sharing one definition so the two cannot drift apart.
+    Detection is per scrape-date AND per catalogue class (QA-05c), because the
+    defect is a property of the scrape and ranks are only inverse to score
+    WITHIN the list that assigned them. The first shipped version pooled GPU and
+    CPU rows and was defeated by Simpson's paradox on the real prod data
+    (per-class rho −1.0 both sides, pooled rho +0.121 — see
+    _passmark_class_rhos). A date is condemned when ANY class with enough
+    points is near-perfectly inverse (rho <= -0.90) — the same shared test the
+    write-side gate applies, so the two cannot drift apart.
 
     We delete rather than relabel: a wrong number is worse than no number (§8),
     and the affected span is fully re-crawlable from PassMark.
@@ -450,20 +453,38 @@ def purge_rank_as_price_rows(conn: sqlite3.Connection) -> None:
         "SELECT DISTINCT date FROM sc_prices WHERE source='passmark' ORDER BY date"
     ).fetchall()]
 
+    # Class per model from sc_products (created and seeded by init/load_product_
+    # catalog before this runs in every entry point). If the table is somehow
+    # absent, fall back to one pooled class — degraded, but never a crash at boot.
+    has_products = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sc_products'"
+    ).fetchone() is not None
+
     condemned = []
     for d in dates:
-        obs = conn.execute(
-            "SELECT model_id, date, source, price_usd, passmark_score "
-            "FROM sc_prices "
-            " WHERE source='passmark' AND date=? "
-            "   AND price_usd IS NOT NULL AND passmark_score IS NOT NULL",
-            (d,),
-        ).fetchall()
-        if len(obs) < 5:
+        if has_products:
+            obs = conn.execute(
+                "SELECT p.model_id, p.date, p.source, p.price_usd, p.passmark_score, "
+                "       COALESCE(pr.category, '?') "
+                "  FROM sc_prices p LEFT JOIN sc_products pr ON pr.model_id = p.model_id "
+                " WHERE p.source='passmark' AND p.date=? "
+                "   AND p.price_usd IS NOT NULL AND p.passmark_score IS NOT NULL",
+                (d,),
+            ).fetchall()
+        else:
+            obs = [row + ("?",) for row in conn.execute(
+                "SELECT model_id, date, source, price_usd, passmark_score "
+                "  FROM sc_prices "
+                " WHERE source='passmark' AND date=? "
+                "   AND price_usd IS NOT NULL AND passmark_score IS NOT NULL",
+                (d,),
+            ).fetchall()]
+        if len(obs) < _PM_INV_MIN_N:
             continue                      # too few points to judge; leave alone
-        rho = _passmark_inversion_check(obs)
-        if rho <= -_PM_INVERSION_LIMIT:
-            condemned.append((d, len(obs), rho))
+        rhos = _passmark_class_rhos(obs, [o[5] for o in obs])
+        worst = min(rhos.values()) if rhos else 0.0
+        if worst <= -_PM_INVERSION_LIMIT:
+            condemned.append((d, len(obs), worst))
 
     if not condemned:
         return
@@ -708,9 +729,13 @@ _PM_MIN_RESOLVED    = 0.50   # ≥50 % of tracked products must yield a usable p
 _PM_SANE_PRICE      = (20.0, 20000.0)      # consumer GPU/CPU street price band, USD
 _PM_DRIFT_FACTOR    = 5.0    # reject a price >5x from this series' last stored value
 _PM_INVERSION_LIMIT = 0.90   # score↔price rank correlation below −0.90 ⇒ rank-as-price
+_PM_INV_MIN_N       = 4      # min priced rows per CLASS to judge inversion (QA-05c);
+                             # the CPU class currently tracks exactly 4 models, and a
+                             # spurious perfect inversion of 4 real prices requires a
+                             # strictly inverse ordering no consumer lineup exhibits
 
 
-def _passmark_inversion_check(rows: list) -> float:
+def _passmark_inversion_check(rows: list, min_n: int = 5) -> float:
     """
     Return Spearman-style rank correlation between score and price.
 
@@ -726,7 +751,7 @@ def _passmark_inversion_check(rows: list) -> float:
     """
     pairs = [(r[4], r[3]) for r in rows if r[3] is not None and r[4] is not None]
     n = len(pairs)
-    if n < 5:
+    if n < min_n:
         return 0.0
     def _ranks(vals):
         order = sorted(range(len(vals)), key=lambda k: vals[k])
@@ -741,6 +766,29 @@ def _passmark_inversion_check(rows: list) -> float:
     den = (sum((rs[k] - ms) ** 2 for k in range(n)) *
            sum((rp[k] - mp) ** 2 for k in range(n))) ** 0.5
     return num / den if den else 0.0
+
+
+def _passmark_class_rhos(rows: list, classes: list) -> dict:
+    """
+    Per-CLASS score↔price rank correlation (BACKLOG QA-05c).
+
+    The pooled check above was defeated in production by Simpson's paradox:
+    GPU-only and CPU-only contamination were each perfectly inverse (rho=−1.0),
+    but PassMark's CPU list is longer than its GPU list, so CPU ranks (134–496)
+    all exceed GPU ranks (3–151) while CPU Mark scores (38k–67k) also exceed
+    G3D scores (16k–38k). Pooled, the between-class effect lifted rho to +0.121
+    and the −0.90 trigger could never fire on the real 14-model mix. Ranks are
+    only inverse to score WITHIN the list that assigned them, so that is where
+    the check must run.
+
+    `rows` and `classes` are parallel lists; returns {class: rho} using
+    _PM_INV_MIN_N as the per-class minimum (below it, rho is 0.0 = no verdict).
+    """
+    per: dict = {}
+    for cls, r in zip(classes, rows):
+        per.setdefault(cls, []).append(r)
+    return {cls: _passmark_inversion_check(rws, min_n=_PM_INV_MIN_N)
+            for cls, rws in per.items()}
 
 
 def crawl_passmark(conn: sqlite3.Connection) -> None:
@@ -788,13 +836,14 @@ def crawl_passmark(conn: sqlite3.Connection) -> None:
         ).fetchall()
     }
 
-    rows, tracked, skipped = [], 0, []
+    rows, row_classes, tracked, skipped = [], [], 0, []
     for model_id, prod in {**GPU_PRODUCTS, **CPU_PRODUCTS}.items():
         kw = prod.get("passmark_kw")
         if kw is None:
             continue   # archived/legacy product — skip live PassMark scraping
         tracked += 1
-        pool    = gpu_entries if prod["category"] == "GPU" else cpu_entries
+        cls     = prod["category"]
+        pool    = gpu_entries if cls == "GPU" else cpu_entries
         match   = _match_passmark_entry(pool, kw)
         if not match:
             skipped.append(f"{model_id}:nomatch")
@@ -822,6 +871,7 @@ def crawl_passmark(conn: sqlite3.Connection) -> None:
 
         pp = round(score / price, 2) if score and price > 0 else None
         rows.append((model_id, TODAY, "passmark", price, score, pp, None))
+        row_classes.append(cls)
         log.info("  PassMark %-22s  score=%-7s  price=$%s", model_id, score, price)
 
     # ── Gate 4: coverage ─────────────────────────────────────────────────────
@@ -835,14 +885,18 @@ def crawl_passmark(conn: sqlite3.Connection) -> None:
         )
         return
 
-    # ── Gate 5: score↔price inversion (the QA-05 defect itself) ──────────────
-    rho = _passmark_inversion_check(rows)
-    if rho <= -_PM_INVERSION_LIMIT:
+    # ── Gate 5: score↔price inversion, PER CLASS (QA-05 / QA-05c) ────────────
+    # Pooling GPU+CPU let the real contamination through via Simpson's paradox
+    # (per-class rho −1.0, pooled +0.121) — see _passmark_class_rhos.
+    rhos = _passmark_class_rhos(rows, row_classes)
+    bad  = {c: r for c, r in rhos.items() if r <= -_PM_INVERSION_LIMIT}
+    if bad:
         log.error(
             "PASSMARK PARSE REJECTED — price is near-perfectly INVERSE to score "
-            "(rho=%.3f <= %.2f). This is the signature of PassMark's Rank column "
-            "landing in price_usd (BACKLOG QA-05). Existing rows kept.",
-            rho, -_PM_INVERSION_LIMIT,
+            "within class(es) %s (limit %.2f). This is the signature of PassMark's "
+            "Rank column landing in price_usd (BACKLOG QA-05/QA-05c). Existing rows kept.",
+            ", ".join("%s rho=%.3f" % (c, r) for c, r in sorted(bad.items())),
+            -_PM_INVERSION_LIMIT,
         )
         return
 
@@ -852,8 +906,10 @@ def crawl_passmark(conn: sqlite3.Connection) -> None:
     )
     conn.commit()
     log.info(
-        "PassMark — %d/%d products stored (rho=%+.2f). Skipped: %s",
-        len(rows), tracked, rho, ", ".join(skipped[:12]) or "none",
+        "PassMark — %d/%d products stored (rho %s). Skipped: %s",
+        len(rows), tracked,
+        " ".join("%s:%+.2f" % (c, r) for c, r in sorted(rhos.items())) or "n/a",
+        ", ".join(skipped[:12]) or "none",
     )
 
 
