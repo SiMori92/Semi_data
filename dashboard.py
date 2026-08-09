@@ -5190,6 +5190,69 @@ def export_xlsx():
         return jsonify({"error": str(exc)}), 500
 
 
+@server.route("/api/export-db")
+def export_db():
+    """
+    Download a byte-exact, restorable copy of the SQLite database.
+
+    This is THE backup endpoint. `/api/export-xlsx` above is for reading; it is
+    not a backup, because there is no import path back from a workbook and Excel
+    silently coerces types on the way out (NULL vs "", int -> float, TEXT dates).
+    Restoring from it means hand-writing a converter during an outage.
+
+    AUTH-GATED, unlike the xlsx route. The workbook exposes the same *figures*
+    the dashboard already charts; a raw DB additionally exposes schema, indexes,
+    and any table not yet surfaced in the UI. Strictly larger disclosure => key.
+
+    `VACUUM INTO` (SQLite 3.27+) writes a transactionally consistent snapshot
+    while the crawlers keep writing. A plain file copy of a live SQLite DB can
+    catch a partial page write plus an unmerged WAL, producing a file that opens
+    fine and is subtly corrupt -- the worst possible backup failure mode, since
+    it passes every check until you need it.
+
+    Written to /tmp, which on Railway is the ephemeral container layer, so this
+    costs nothing on the persistent volume (CLAUDE.md 5.1) and is discarded on
+    the next redeploy either way.
+    """
+    if flask_request.headers.get("X-API-Key", "") != _RELAY_API_KEY or not _RELAY_API_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+
+    tmp = "/tmp/semiconductor_snapshot.db"
+    try:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+        # Separate short-lived connection: VACUUM INTO cannot run inside a
+        # transaction, and get_conn() hands back a shared long-lived handle.
+        src = sqlite3.connect(DB_PATH)
+        try:
+            try:
+                src.execute("VACUUM INTO ?", (tmp,))
+            except sqlite3.OperationalError:
+                # VACUUM INTO needs SQLite >= 3.27. If the container ships an
+                # older library, fall back to the online-backup API, which is
+                # equally consistent (page-by-page under a read lock) and has
+                # been in Python since 3.7 — it just does not compact.
+                dst = sqlite3.connect(tmp)
+                try:
+                    src.backup(dst)
+                finally:
+                    dst.close()
+        finally:
+            src.close()
+
+        if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
+            return jsonify({"error": "snapshot produced no file"}), 500
+
+        fname = f"semiconductor_data_{datetime.utcnow():%Y%m%d_%H%M}.db"
+        return send_file(
+            tmp, as_attachment=True, download_name=fname,
+            mimetype="application/vnd.sqlite3",
+        )
+    except Exception as exc:                          # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+
+
 @server.route("/api/upload-iv", methods=["POST"])
 def upload_iv():
     """
