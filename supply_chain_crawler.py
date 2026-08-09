@@ -425,6 +425,65 @@ def purge_null_price_rows(conn: sqlite3.Connection) -> None:
         log.warning("Purged %d contentless sc_prices rows (NULL price + NULL score).", n)
 
 
+def purge_rank_as_price_rows(conn: sqlite3.Connection) -> None:
+    """
+    Delete PassMark rows whose price_usd is really PassMark's Rank (BACKLOG QA-05).
+
+    Why this exists at all: fixing _parse_passmark_table() stops NEW contaminated
+    rows, but every row already written sits on the Railway volume and no writer
+    ever revisits it. That is the SC-14 lesson — a correction that only touches
+    the writer reads as complete in git while production stays wrong. Runs from
+    --curated-only on every boot, exactly like purge_null_price_rows().
+
+    Detection is per scrape-date, not per row, because the defect is a property
+    of the scrape: within one date the whole price column is either prices or
+    ranks. A date is condemned when its non-null prices are near-perfectly
+    inverse to score (rho <= -0.90) — the same test the write-side gate applies,
+    deliberately sharing one definition so the two cannot drift apart.
+
+    We delete rather than relabel: a wrong number is worse than no number (§8),
+    and the affected span is fully re-crawlable from PassMark.
+
+    Idempotent — a no-op once clean.
+    """
+    dates = [d for (d,) in conn.execute(
+        "SELECT DISTINCT date FROM sc_prices WHERE source='passmark' ORDER BY date"
+    ).fetchall()]
+
+    condemned = []
+    for d in dates:
+        obs = conn.execute(
+            "SELECT model_id, date, source, price_usd, passmark_score "
+            "FROM sc_prices "
+            " WHERE source='passmark' AND date=? "
+            "   AND price_usd IS NOT NULL AND passmark_score IS NOT NULL",
+            (d,),
+        ).fetchall()
+        if len(obs) < 5:
+            continue                      # too few points to judge; leave alone
+        rho = _passmark_inversion_check(obs)
+        if rho <= -_PM_INVERSION_LIMIT:
+            condemned.append((d, len(obs), rho))
+
+    if not condemned:
+        return
+
+    total = 0
+    for d, n, rho in condemned:
+        total += conn.execute(
+            "DELETE FROM sc_prices WHERE source='passmark' AND date=?", (d,)
+        ).rowcount
+        log.warning(
+            "  QA-05 purge — %s: %d rows, score/price rho=%+.3f (rank-as-price).", d, n, rho
+        )
+    conn.commit()
+    log.warning(
+        "Purged %d contaminated sc_prices[passmark] rows across %d scrape date(s) "
+        "(BACKLOG QA-05 — PassMark Rank column stored as price_usd).",
+        total, len(condemned),
+    )
+
+
 def load_curated_demand_indicators(conn: sqlite3.Connection) -> None:
     """Seed sc_demand_indicators (BACKLOG SC-06 / SC-00 fix B).
 
@@ -498,9 +557,16 @@ def _fetch_passmark_page(url: str) -> list[dict]:
             if not isinstance(row, list) or len(row) < 2:
                 continue
             name  = str(row[0]).strip()
-            score = float(row[1]) if row[1] else None
-            price = float(row[2]) if len(row) > 2 and row[2] and row[2] != "NA" else None
-            results.append({"name": name, "score": score, "price_usd": price})
+            score = _passmark_num(str(row[1])) if len(row) > 1 else None
+            # row[2] is assumed to be price, but the HTML table's third column is
+            # Rank — see _parse_passmark_table's docstring (QA-05). The assumption
+            # is unverifiable from here because this JS array is not currently
+            # emitted by the live page, so the caller's gate is what actually
+            # protects this path: an array that is really (name, score, rank)
+            # produces a perfect score/price inversion and is rejected wholesale.
+            price = _passmark_num(str(row[2])) if len(row) > 2 else None
+            results.append({"name": name, "score": score, "price_usd": price,
+                            "rank": None})
         return results
 
     except Exception as exc:
@@ -508,35 +574,113 @@ def _fetch_passmark_page(url: str) -> list[dict]:
         return []
 
 
+def _passmark_num(cell_text: str):
+    """
+    Parse one PassMark table cell into a float, or None.
+
+    PassMark writes "NA" for both Value and Price on any part it has no pricing
+    for — which is most of the catalogue. "NA" MUST come back as None and not as
+    a skipped cell: a parser that merely skips it slides the next column into the
+    slot, which is the positional drift this whole function exists to prevent.
+    """
+    txt = (cell_text or "").strip().replace(",", "").replace("$", "").replace("*", "")
+    if not txt or txt.upper() in {"NA", "N/A", "-", "—"}:
+        return None
+    try:
+        return float(txt)
+    except ValueError:
+        return None
+
+
+# Header text → the dict key we store it under. Matched case-insensitively on a
+# substring, because PassMark appends parentheticals ("Rank  (lower is better)").
+_PASSMARK_COLS = (
+    ("g3d mark",    "score"),
+    ("cpu mark",    "score"),
+    ("rank",        "rank"),
+    ("value",       "value"),
+    ("price",       "price_usd"),
+)
+
+
 def _parse_passmark_table(html: str) -> list[dict]:
-    """Fallback: scrape the HTML table on PassMark list pages."""
-    results = []
+    """
+    Scrape the HTML table on PassMark list pages, addressing columns BY HEADER.
+
+    ── Why this is header-driven and not positional (BACKLOG QA-05) ──────────
+    The previous implementation walked the cells left-to-right and assigned the
+    FIRST numeric it found to `score` and the SECOND to `price`. The real table is
+
+        Videocard Name | Passmark G3D Mark | Rank | Videocard Value | Price (USD)
+
+    so "the second number" is **Rank**, not Price. Every PassMark row this project
+    ever stored therefore recorded a rank in `price_usd` — RTX-4090 at "$3"
+    (rank 3), RX-7800-XT at "$52" (rank 52) — perfectly inverse to score on all
+    nine scrape dates, and rendered on the consumer charts in the SOLID
+    *observed* style that SC-16 reserves for real measurements.
+
+    Reading columns by header is what makes a column insertion a parse failure
+    instead of a silent unit swap. If the header row cannot be located or the
+    Price column is absent, return [] so the caller's gate rejects the run —
+    an unrecognised layout must never fall back to guessing by position.
+    """
+    results: list[dict] = []
     try:
         soup = BeautifulSoup(html, "html.parser")
-        table = soup.find("table", {"id": "cputable"}) or soup.find("table", {"id": "gputTable"})
+        table = (soup.find("table", {"id": "cputable"})
+                 or soup.find("table", {"id": "gputTable"})
+                 or soup.find("table", {"id": "gpuTable"}))
         if not table:
+            log.warning("PassMark — no recognised results table in page.")
             return []
-        for row in table.find_all("tr")[1:]:
+
+        # ── Locate the header row and map header text → column index ─────────
+        header_cells = []
+        head = table.find("thead")
+        if head and head.find("tr"):
+            header_cells = head.find("tr").find_all(["th", "td"])
+        else:
+            first = table.find("tr")
+            if first:
+                header_cells = first.find_all(["th", "td"])
+        if not header_cells:
+            log.warning("PassMark — results table has no header row.")
+            return []
+
+        colmap: dict = {}
+        for idx, cell in enumerate(header_cells):
+            label = cell.get_text(" ", strip=True).lower()
+            for needle, key in _PASSMARK_COLS:
+                if needle in label and key not in colmap:
+                    colmap[key] = idx
+                    break
+
+        if "price_usd" not in colmap or "score" not in colmap:
+            log.error(
+                "PassMark — PRICE/SCORE COLUMN NOT FOUND (headers=%s). Layout changed; "
+                "refusing to parse positionally (BACKLOG QA-05).",
+                [c.get_text(' ', strip=True) for c in header_cells],
+            )
+            return []
+
+        body = table.find("tbody") or table
+        for row in body.find_all("tr"):
             cells = row.find_all("td")
-            if len(cells) < 2:
+            if len(cells) <= colmap["price_usd"]:
+                continue                      # header row, spacer, or short row
+            name = cells[0].get_text(strip=True)
+            if not name:
                 continue
-            name  = cells[0].get_text(strip=True)
-            score = None
-            price = None
-            for cell in cells[1:]:
-                txt = cell.get_text(strip=True).replace(",", "").replace("$", "")
-                try:
-                    val = float(txt)
-                    if score is None:
-                        score = val
-                    else:
-                        price = val
-                        break
-                except ValueError:
-                    continue
-            results.append({"name": name, "score": score, "price_usd": price})
+            results.append({
+                "name":      name,
+                "score":     _passmark_num(cells[colmap["score"]].get_text(strip=True)),
+                "price_usd": _passmark_num(cells[colmap["price_usd"]].get_text(strip=True)),
+                "rank":      (_passmark_num(cells[colmap["rank"]].get_text(strip=True))
+                              if "rank" in colmap and len(cells) > colmap["rank"] else None),
+            })
     except Exception as exc:
         log.warning("PassMark table parse failed: %s", exc)
+        return []
     return results
 
 
@@ -558,8 +702,58 @@ def _match_passmark_entry(entries: list[dict], keyword: str) -> dict | None:
     return best if best_count >= 2 else None
 
 
+# ── PassMark validation-gate thresholds (BACKLOG QA-05) ──────────────────────
+_PM_MIN_ENTRIES     = 200    # the GPU/CPU lists carry 900+ models; <200 ⇒ bad parse
+_PM_MIN_RESOLVED    = 0.50   # ≥50 % of tracked products must yield a usable price
+_PM_SANE_PRICE      = (20.0, 20000.0)      # consumer GPU/CPU street price band, USD
+_PM_DRIFT_FACTOR    = 5.0    # reject a price >5x from this series' last stored value
+_PM_INVERSION_LIMIT = 0.90   # score↔price rank correlation below −0.90 ⇒ rank-as-price
+
+
+def _passmark_inversion_check(rows: list) -> float:
+    """
+    Return Spearman-style rank correlation between score and price.
+
+    This is the specific trip-wire for QA-05's actual defect. Real street prices
+    correlate POSITIVELY but loosely with performance (r ≈ +0.5 to +0.9, with
+    plenty of exceptions — a last-gen flagship undercuts a current midrange).
+    PassMark's Rank column is by construction a PERFECT inverse of score.
+
+    So a correlation at or below −0.90 is not "an unusual market", it is a
+    near-certain sign that a non-price column landed in price_usd. Range checks
+    alone would not have caught this: rank values 3–151 sit comfortably inside
+    any plausible GPU price band. It is the *relationship* that is impossible.
+    """
+    pairs = [(r[4], r[3]) for r in rows if r[3] is not None and r[4] is not None]
+    n = len(pairs)
+    if n < 5:
+        return 0.0
+    def _ranks(vals):
+        order = sorted(range(len(vals)), key=lambda k: vals[k])
+        rk = [0.0] * len(vals)
+        for pos, k in enumerate(order):
+            rk[k] = float(pos)
+        return rk
+    rs = _ranks([p[0] for p in pairs])
+    rp = _ranks([p[1] for p in pairs])
+    ms, mp = sum(rs) / n, sum(rp) / n
+    num = sum((rs[k] - ms) * (rp[k] - mp) for k in range(n))
+    den = (sum((rs[k] - ms) ** 2 for k in range(n)) *
+           sum((rp[k] - mp) ** 2 for k in range(n))) ** 0.5
+    return num / den if den else 0.0
+
+
 def crawl_passmark(conn: sqlite3.Connection) -> None:
-    """Crawl PassMark GPU and CPU lists; store price + score per product."""
+    """
+    Crawl PassMark GPU and CPU lists; store price + score per product.
+
+    Validation gate (BACKLOG QA-05). PassMark is one of only two genuinely-live
+    supply-chain sources and was the only one with no gate; the others
+    (crawl_steam_survey, crawl_trendforce_spot, crawl_tsmc/umc/nanya_revenue) all
+    refuse to write on a bad parse. Failing closed here means a layout change
+    shows up as an SLA breach on sc_prices[passmark] — a signal the dashboard
+    already renders — instead of as plausible-looking numbers on a chart.
+    """
     GPU_URL = "https://www.videocardbenchmark.net/gpu_list.php"
     CPU_URL = "https://www.cpubenchmark.net/cpu_list.php"
 
@@ -572,28 +766,95 @@ def crawl_passmark(conn: sqlite3.Connection) -> None:
     cpu_entries = _fetch_passmark_page(CPU_URL)
     log.info("PassMark — fetched %d CPU entries.", len(cpu_entries))
 
-    rows = []
+    # ── Gate 1: did we actually get the catalogue? ────────────────────────────
+    if len(gpu_entries) < _PM_MIN_ENTRIES or len(cpu_entries) < _PM_MIN_ENTRIES:
+        log.error(
+            "PASSMARK PARSE REJECTED — thin catalogue (gpu=%d cpu=%d, need >=%d each). "
+            "Existing rows kept, nothing written.",
+            len(gpu_entries), len(cpu_entries), _PM_MIN_ENTRIES,
+        )
+        return
+
+    # Last stored price per model, for the drift check.
+    last_price = {
+        mid: px for mid, px in conn.execute(
+            """
+            SELECT model_id, price_usd FROM sc_prices p
+             WHERE source = 'passmark' AND price_usd IS NOT NULL
+               AND date = (SELECT MAX(date) FROM sc_prices
+                            WHERE source='passmark' AND model_id = p.model_id
+                              AND price_usd IS NOT NULL)
+            """
+        ).fetchall()
+    }
+
+    rows, tracked, skipped = [], 0, []
     for model_id, prod in {**GPU_PRODUCTS, **CPU_PRODUCTS}.items():
         kw = prod.get("passmark_kw")
         if kw is None:
             continue   # archived/legacy product — skip live PassMark scraping
+        tracked += 1
         pool    = gpu_entries if prod["category"] == "GPU" else cpu_entries
         match   = _match_passmark_entry(pool, kw)
         if not match:
-            log.debug("  PassMark — no match for %s", model_id)
+            skipped.append(f"{model_id}:nomatch")
             continue
+
         score = match["score"]
         price = match["price_usd"]
-        pp    = round(score / price, 2) if score and price and price > 0 else None
+
+        # ── Gate 2: never persist a priceless row (SC-01) ────────────────────
+        # PassMark lists "NA" for parts it has no pricing on. A NULL-price row
+        # inflates COUNT(*) and reads as a healthy scrape; omitting it is honest.
+        if price is None:
+            skipped.append(f"{model_id}:noprice")
+            continue
+
+        # ── Gate 3: per-row plausibility ─────────────────────────────────────
+        lo, hi = _PM_SANE_PRICE
+        if not (lo <= price <= hi):
+            skipped.append(f"{model_id}:range({price})")
+            continue
+        prev = last_price.get(model_id)
+        if prev and prev > 0 and not (1 / _PM_DRIFT_FACTOR <= price / prev <= _PM_DRIFT_FACTOR):
+            skipped.append(f"{model_id}:drift({prev}->{price})")
+            continue
+
+        pp = round(score / price, 2) if score and price > 0 else None
         rows.append((model_id, TODAY, "passmark", price, score, pp, None))
         log.info("  PassMark %-22s  score=%-7s  price=$%s", model_id, score, price)
+
+    # ── Gate 4: coverage ─────────────────────────────────────────────────────
+    resolved = (len(rows) / tracked) if tracked else 0.0
+    if resolved < _PM_MIN_RESOLVED:
+        log.error(
+            "PASSMARK PARSE REJECTED — only %d/%d products resolved (%.0f%% < %.0f%%). "
+            "Skipped: %s. Existing rows kept, nothing written.",
+            len(rows), tracked, resolved * 100, _PM_MIN_RESOLVED * 100,
+            ", ".join(skipped[:12]),
+        )
+        return
+
+    # ── Gate 5: score↔price inversion (the QA-05 defect itself) ──────────────
+    rho = _passmark_inversion_check(rows)
+    if rho <= -_PM_INVERSION_LIMIT:
+        log.error(
+            "PASSMARK PARSE REJECTED — price is near-perfectly INVERSE to score "
+            "(rho=%.3f <= %.2f). This is the signature of PassMark's Rank column "
+            "landing in price_usd (BACKLOG QA-05). Existing rows kept.",
+            rho, -_PM_INVERSION_LIMIT,
+        )
+        return
 
     conn.executemany(
         "INSERT OR REPLACE INTO sc_prices VALUES (?,?,?,?,?,?,?)",
         rows,
     )
     conn.commit()
-    log.info("PassMark — %d products stored.", len(rows))
+    log.info(
+        "PassMark — %d/%d products stored (rho=%+.2f). Skipped: %s",
+        len(rows), tracked, rho, ", ".join(skipped[:12]) or "none",
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1348,6 +1609,7 @@ def crawl_supply_chain(quick: bool = False, curated_only: bool = False) -> None:
     load_curated_steam_survey(conn)   # seed Steam data; live crawl may overwrite
     load_curated_demand_indicators(conn)  # seed demand data; TSMC/UMC live crawl may overwrite
     purge_null_price_rows(conn)       # BACKLOG SC-01 — idempotent cleanup
+    purge_rank_as_price_rows(conn)    # BACKLOG QA-05 — idempotent cleanup
 
     if curated_only:
         # Recorded under a DISTINCT job name (QA F-01). This path makes zero
