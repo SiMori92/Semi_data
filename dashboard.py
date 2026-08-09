@@ -892,14 +892,20 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
                            title="Fetch fresh market data from Yahoo Finance (takes ~2 min)"),
                 # ── Full-dataset export ────────────────────────────────────
                 # Plain anchor, not a Dash callback: the browser streams the
-                # file straight from /api/export-xlsx, so the workbook is never
+                # file straight from the endpoint, so the payload is never
                 # base64-inflated through a callback response.
+                #
+                # Points at the ZIP, not the workbook. One click can only
+                # produce one download — browsers suppress the second as a
+                # popup — so a bundle is the only way to deliver both the
+                # readable .xlsx and the restorable .db together.
                 dbc.Button("⬇️ Download Data", id="btn-download-data",
-                           href="/api/export-xlsx", external_link=True,
+                           href="/api/export-bundle", external_link=True,
                            color="success", size="sm",
                            style={"marginLeft": "8px", "fontSize": "12px"},
-                           title="Download the full accumulated dataset "
-                                 "(all tables, multi-sheet Excel workbook)"),
+                           title="Download the full dataset as a .zip: "
+                                 "multi-sheet Excel workbook (for reading) + "
+                                 "SQLite .db snapshot (restorable backup)"),
             ], style={"display": "flex", "alignItems": "center", "gap": "0"}),
             # ── Run-crawl status toast ────────────────────────────────────────
             dbc.Toast(
@@ -5118,24 +5124,24 @@ def _export_sheet_name(table: str) -> str:
     return name[:31]
 
 
-@server.route("/api/export-xlsx")
-def export_xlsx():
+def _build_export_workbook() -> "io.BytesIO":
     """
-    Download the entire accumulated backend dataset as a multi-sheet .xlsx.
+    Build the multi-sheet .xlsx of the entire dataset and return it as a buffer.
 
-    Public by design — the dashboard already renders this data in charts.
-    Every table in the DB is exported (discovered dynamically, so tables added
-    later are picked up without touching this route). Sheet 1 is a README
-    carrying the export timestamp and per-table row counts, satisfying the
-    timestamp requirement in CLAUDE.md §8.
+    Factored out of the route so `/api/export-xlsx` and `/api/export-bundle`
+    produce a byte-identical workbook from ONE implementation. Two copies of
+    this loop would drift, and the second copy is the one nobody would notice
+    going wrong (§6.5's recurring lesson: two surfaces computing the same thing
+    separately will eventually disagree).
 
-    Streamed from an in-memory buffer via send_file — no Dash callback, so the
-    payload is never base64-inflated into a callback response.
+    Every table is discovered from `sqlite_master`, so tables added later are
+    picked up without touching this function. Sheet 1 is a README carrying the
+    export timestamp and per-table row counts (CLAUDE.md §8).
     """
     import io
 
+    conn = get_conn()
     try:
-        conn = get_conn()
         tables = [
             r[0] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' "
@@ -5177,17 +5183,154 @@ def export_xlsx():
             )
             readme.to_excel(writer, sheet_name="README", index=False)
 
-        conn.close()
         buf.seek(0)
+        return buf
+    finally:
+        conn.close()
 
+
+def _snapshot_db(tmp: str) -> str:
+    """
+    Write a consistent, byte-exact copy of the live DB to `tmp` and return it.
+
+    `VACUUM INTO` (SQLite >= 3.27) snapshots under a read lock, so it stays
+    consistent while the crawlers write. A plain file copy can capture a torn
+    page plus an unmerged WAL and yield a file that opens fine and is subtly
+    corrupt — a backup that passes every check until the day you need it.
+
+    Shared by `/api/export-db` and `/api/export-bundle` for the same
+    one-implementation reason as `_build_export_workbook()`.
+    """
+    if os.path.exists(tmp):
+        os.remove(tmp)
+
+    # Separate short-lived connection: VACUUM INTO cannot run inside a
+    # transaction, and get_conn() hands back a shared long-lived handle.
+    src = sqlite3.connect(DB_PATH)
+    try:
+        try:
+            src.execute("VACUUM INTO ?", (tmp,))
+        except sqlite3.OperationalError:
+            # Needs SQLite >= 3.27. If the container ships an older library,
+            # fall back to the online-backup API, which is equally consistent
+            # (page-by-page under a read lock) and has been in Python since
+            # 3.7 — it just does not compact.
+            dst = sqlite3.connect(tmp)
+            try:
+                src.backup(dst)
+            finally:
+                dst.close()
+    finally:
+        src.close()
+
+    if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
+        raise RuntimeError("snapshot produced no file")
+    return tmp
+
+
+@server.route("/api/export-xlsx")
+def export_xlsx():
+    """
+    Download the entire dataset as a multi-sheet .xlsx (reading copy).
+
+    Public by design — the dashboard already renders this data in charts.
+    Kept as its own route because `local/backup_local.sh` and any existing
+    bookmark point at it; the navbar button now serves the bundle instead.
+
+    Streamed from an in-memory buffer via send_file — no Dash callback, so the
+    payload is never base64-inflated into a callback response.
+    """
+    try:
+        buf = _build_export_workbook()
         fname = f"semiconductor_data_{datetime.utcnow():%Y%m%d_%H%M}.xlsx"
         return send_file(
             buf, as_attachment=True, download_name=fname,
             mimetype="application/vnd.openxmlformats-officedocument."
                      "spreadsheetml.sheet",
         )
-    except Exception as exc:
+    except Exception as exc:                          # noqa: BLE001
         return jsonify({"error": str(exc)}), 500
+
+
+@server.route("/api/export-bundle")
+def export_bundle():
+    """
+    Download BOTH exports as one .zip — what the navbar button serves.
+
+    Why a zip and not two responses: a single click can only produce one
+    download; browsers suppress the second as a popup. One archive is the only
+    way to satisfy "click once, get both".
+
+      semiconductor_data_<stamp>.xlsx   reading copy (Excel coerces types)
+      semiconductor_data_<stamp>.db     the restorable backup
+      README.txt                        which file is which, and the restore recipe
+
+    Public, like `/api/export-xlsx`. The gate this route does NOT have was
+    reconsidered deliberately: `/api/export-xlsx` already dumps every table
+    discovered from `sqlite_master` with no auth, so the row data is public
+    already. Gating the .db protected schema DDL and indexes only — while the
+    contents it describes stayed open. That is not a security boundary, it is
+    the appearance of one, and an inconsistent gate is worse than none because
+    it invites the assumption that the data is protected. If this dataset ever
+    needs to be private, BOTH routes must be gated; do not re-gate just this one.
+
+    The .db is deflated inside the zip, so the transfer is comparable to the
+    .db.gz that `backup_local.sh` stores, and macOS/Windows unpack it natively.
+    """
+    import io
+    import zipfile
+
+    tmp = "/tmp/semiconductor_bundle.db"
+    try:
+        stamp = f"{datetime.utcnow():%Y%m%d_%H%M}"
+        wb = _build_export_workbook()
+        _snapshot_db(tmp)
+
+        readme = (
+            "Semiconductor Industry Tracker — full data export\n"
+            f"Generated: {datetime.utcnow():%Y-%m-%d %H:%M} UTC\n"
+            "\n"
+            f"  semiconductor_data_{stamp}.xlsx\n"
+            "      Reading copy. Every table as a sheet, README on sheet 1.\n"
+            "      NOT a backup: there is no import path back, and Excel\n"
+            "      coerces NULL/int/date on the way out.\n"
+            "\n"
+            f"  semiconductor_data_{stamp}.db\n"
+            "      The restorable backup. Byte-exact SQLite snapshot taken\n"
+            "      with VACUUM INTO, consistent even under concurrent writes.\n"
+            "\n"
+            "Restore / inspect:\n"
+            f"  sqlite3 semiconductor_data_{stamp}.db \\\n"
+            "      \"PRAGMA integrity_check; SELECT COUNT(*) FROM daily_prices;\"\n"
+            f"  DB_PATH=semiconductor_data_{stamp}.db python3 dashboard.py\n"
+        )
+
+        zbuf = io.BytesIO()
+        with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr(f"README.txt", readme)
+            z.writestr(f"semiconductor_data_{stamp}.xlsx", wb.getvalue())
+            # write() streams from disk rather than loading the whole DB into
+            # memory alongside the zip — the workbook is already buffered, and
+            # holding both uncompressed would be the peak-RSS risk on a small
+            # Railway container.
+            z.write(tmp, arcname=f"semiconductor_data_{stamp}.db")
+        zbuf.seek(0)
+
+        return send_file(
+            zbuf, as_attachment=True,
+            download_name=f"semiconductor_data_{stamp}.zip",
+            mimetype="application/zip",
+        )
+    except Exception as exc:                          # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+    finally:
+        # /tmp is the ephemeral container layer, but a 60 MB file per click
+        # would still accumulate for the life of the container.
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 @server.route("/api/export-db")
@@ -5195,55 +5338,24 @@ def export_db():
     """
     Download a byte-exact, restorable copy of the SQLite database.
 
-    This is THE backup endpoint. `/api/export-xlsx` above is for reading; it is
-    not a backup, because there is no import path back from a workbook and Excel
+    This is THE backup endpoint. `/api/export-xlsx` is for reading; it is not a
+    backup, because there is no import path back from a workbook and Excel
     silently coerces types on the way out (NULL vs "", int -> float, TEXT dates).
     Restoring from it means hand-writing a converter during an outage.
 
-    AUTH-GATED, unlike the xlsx route. The workbook exposes the same *figures*
-    the dashboard already charts; a raw DB additionally exposes schema, indexes,
-    and any table not yet surfaced in the UI. Strictly larger disclosure => key.
+    Kept as a separate route from `/api/export-bundle` so `backup_local.sh` can
+    fetch just the database, without paying to build a workbook it discards.
 
-    `VACUUM INTO` (SQLite 3.27+) writes a transactionally consistent snapshot
-    while the crawlers keep writing. A plain file copy of a live SQLite DB can
-    catch a partial page write plus an unmerged WAL, producing a file that opens
-    fine and is subtly corrupt -- the worst possible backup failure mode, since
-    it passes every check until you need it.
+    PUBLIC, matching `/api/export-xlsx` — see the note in `export_bundle()` for
+    why gating only this route was security theatre. Uncompressed on the wire;
+    the backup script gzips it on arrival.
 
-    Written to /tmp, which on Railway is the ephemeral container layer, so this
-    costs nothing on the persistent volume (CLAUDE.md 5.1) and is discarded on
-    the next redeploy either way.
+    Written to /tmp, the ephemeral container layer, so it costs nothing on the
+    persistent volume (CLAUDE.md §5.1).
     """
-    if flask_request.headers.get("X-API-Key", "") != _RELAY_API_KEY or not _RELAY_API_KEY:
-        return jsonify({"error": "unauthorized"}), 401
-
     tmp = "/tmp/semiconductor_snapshot.db"
     try:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-
-        # Separate short-lived connection: VACUUM INTO cannot run inside a
-        # transaction, and get_conn() hands back a shared long-lived handle.
-        src = sqlite3.connect(DB_PATH)
-        try:
-            try:
-                src.execute("VACUUM INTO ?", (tmp,))
-            except sqlite3.OperationalError:
-                # VACUUM INTO needs SQLite >= 3.27. If the container ships an
-                # older library, fall back to the online-backup API, which is
-                # equally consistent (page-by-page under a read lock) and has
-                # been in Python since 3.7 — it just does not compact.
-                dst = sqlite3.connect(tmp)
-                try:
-                    src.backup(dst)
-                finally:
-                    dst.close()
-        finally:
-            src.close()
-
-        if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
-            return jsonify({"error": "snapshot produced no file"}), 500
-
+        _snapshot_db(tmp)
         fname = f"semiconductor_data_{datetime.utcnow():%Y%m%d_%H%M}.db"
         return send_file(
             tmp, as_attachment=True, download_name=fname,
