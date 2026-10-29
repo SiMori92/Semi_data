@@ -651,7 +651,13 @@ def _card(children, style=None):
             "border": f"1px solid #30363d", "marginBottom": "12px"}
     if style:
         base.update(style)
-    return html.Div(children, style=base)
+    return html.Div(children, style=base, className="dashboard-card")
+
+
+def _responsive_graph(*args, **kwargs):
+    """Resize Plotly figures with their cards after a viewport or grid change."""
+    kwargs.setdefault("responsive", True)
+    return dcc.Graph(*args, **kwargs)
 
 
 def _kpi(label: str, value: str, delta: str = "", color: str = TEXT):
@@ -666,6 +672,15 @@ def _section_title(text: str):
     return html.Div(text, style={"fontSize": "13px", "fontWeight": "600",
                                   "color": ACCENT, "textTransform": "uppercase",
                                   "letterSpacing": "1px", "marginBottom": "8px"})
+
+
+def _status_chip(icon: str, label: str, colour: str, detail: str):
+    """Expose status details to touch and keyboard users, not only hover."""
+    return html.Details([
+        html.Summary([html.Span(icon, style={"marginRight": "4px"}), label],
+                     style={"color": colour, "border": f"1px solid {colour}"}),
+        html.Div(detail, className="dashboard-status-detail"),
+    ], className="dashboard-status-chip")
 
 
 def _crawl_timestamp() -> str:
@@ -858,55 +873,59 @@ app = dash.Dash(
 #   gunicorn dashboard:server --bind 0.0.0.0:$PORT
 server = app.server
 
-app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "100vh", "padding": "0"}, children=[
+app.layout = dbc.Container(fluid=True, className="dashboard-app", style={"background": BG, "minHeight": "100vh", "padding": "0"}, children=[
 
     # ── Top nav bar ───────────────────────────────────────────────────────────
     dbc.Navbar(
-        dbc.Container(fluid=True, children=[
-            html.Span("⚡ Semiconductor Industry Tracker", style={
+        dbc.Container(fluid=True, className="dashboard-navbar", children=[
+            html.Span("⚡ Semiconductor Industry Tracker", className="dashboard-brand", style={
                 "color": TEXT, "fontSize": "17px", "fontWeight": "700", "letterSpacing": "0.3px"
             }),
             html.Div([
-                html.Span("Last crawl: ", style={"color": SUBTEXT, "fontSize": "12px"}),
-                html.Span(id="last-crawl-time", style={"color": ACCENT, "fontSize": "12px"}),
-                # ── Reload confirmation stamp (updates on every manual refresh) ─
-                html.Span(id="reload-stamp", style={
-                    "color": GREEN, "fontSize": "11px", "marginLeft": "12px",
-                    "opacity": "0.8",
-                }),
-                # ── Data-freshness badge (BACKLOG SC-03) ───────────────────
-                html.Span(id="data-freshness-badge", style={"marginLeft": "20px"}),
-                # ── Crawl-schedule badge (QA F-01) ─────────────────────────
-                # Deliberately SEPARATE from the freshness chip beside it. That
-                # one answers "is the data current?", this one answers "are we
-                # still crawling?" — different causes, different fixes, and a
-                # publisher going quiet must not look like our scheduler dying.
-                html.Span(id="crawl-status-badge", style={"marginLeft": "10px"}),
-                # ── IBKR connection badge ──────────────────────────────────
-                html.Span(id="ibkr-status-badge", style={"marginLeft": "10px"}),
-                dbc.Button("🔄 Reload Charts", id="btn-refresh", color="primary",
-                           size="sm", style={"marginLeft": "16px", "fontSize": "12px"},
-                           title="Re-read data from the database and redraw all charts"),
-                dbc.Button("⚡ Run Crawl", id="btn-run-crawl", color="warning",
-                           size="sm", style={"marginLeft": "8px", "fontSize": "12px"},
-                           title="Fetch fresh market data from Yahoo Finance (takes ~2 min)"),
-                # ── Full-dataset export ────────────────────────────────────
-                # Plain anchor, not a Dash callback: the browser streams the
-                # file straight from the endpoint, so the payload is never
-                # base64-inflated through a callback response.
-                #
-                # Points at the ZIP, not the workbook. One click can only
-                # produce one download — browsers suppress the second as a
-                # popup — so a bundle is the only way to deliver both the
-                # readable .xlsx and the restorable .db together.
-                dbc.Button("⬇️ Download Data", id="btn-download-data",
-                           href="/api/export-bundle", external_link=True,
-                           color="success", size="sm",
-                           style={"marginLeft": "8px", "fontSize": "12px"},
-                           title="Download the full dataset as a .zip: "
-                                 "multi-sheet Excel workbook (for reading) + "
-                                 "SQLite .db snapshot (restorable backup)"),
-            ], style={"display": "flex", "alignItems": "center", "gap": "0"}),
+                html.Div([
+                    html.Span("Last crawl: ", style={"color": SUBTEXT, "fontSize": "12px"}),
+                    html.Span(id="last-crawl-time", style={"color": ACCENT, "fontSize": "12px"}),
+                    # ── Reload confirmation stamp (updates on every manual refresh) ─
+                    html.Span(id="reload-stamp", style={
+                        "color": GREEN, "fontSize": "11px", "marginLeft": "12px",
+                        "opacity": "0.8",
+                    }),
+                    # ── Data-freshness badge (BACKLOG SC-03) ───────────────────
+                    html.Span(id="data-freshness-badge", style={"marginLeft": "20px"}),
+                    # ── Crawl-schedule badge (QA F-01) ─────────────────────────
+                    # Deliberately SEPARATE from the freshness chip beside it. That
+                    # one answers "is the data current?", this one answers "are we
+                    # still crawling?" — different causes, different fixes, and a
+                    # publisher going quiet must not look like our scheduler dying.
+                    html.Span(id="crawl-status-badge", style={"marginLeft": "10px"}),
+                    # ── IBKR connection badge ──────────────────────────────────
+                    html.Span(id="ibkr-status-badge", style={"marginLeft": "10px"}),
+                ], className="dashboard-status"),
+                html.Div([
+                    dbc.Button("🔄 Reload Charts", id="btn-refresh", color="primary",
+                               size="sm", style={"marginLeft": "16px", "fontSize": "12px"},
+                               title="Re-read data from the database and redraw all charts"),
+                    dbc.Button("⚡ Run Crawl", id="btn-run-crawl", color="warning",
+                               size="sm", style={"marginLeft": "8px", "fontSize": "12px"},
+                               title="Fetch fresh market data from Yahoo Finance (takes ~2 min)"),
+                    # ── Full-dataset export ────────────────────────────────────
+                    # Plain anchor, not a Dash callback: the browser streams the
+                    # file straight from the endpoint, so the payload is never
+                    # base64-inflated through a callback response.
+                    #
+                    # Points at the ZIP, not the workbook. One click can only
+                    # produce one download — browsers suppress the second as a
+                    # popup — so a bundle is the only way to deliver both the
+                    # readable .xlsx and the restorable .db together.
+                    dbc.Button("⬇️ Download Data", id="btn-download-data",
+                               href="/api/export-bundle", external_link=True,
+                               color="success", size="sm",
+                               style={"marginLeft": "8px", "fontSize": "12px"},
+                               title="Download the full dataset as a .zip: "
+                                     "multi-sheet Excel workbook (for reading) + "
+                                     "SQLite .db snapshot (restorable backup)"),
+                ], className="dashboard-actions"),
+            ], className="dashboard-navbar-right"),
             # ── Run-crawl status toast ────────────────────────────────────────
             dbc.Toast(
                 id="crawl-toast",
@@ -914,6 +933,7 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
                 is_open=False,
                 dismissable=True,
                 icon="success",
+                className="dashboard-toast",
                 style={"position": "fixed", "top": 66, "right": 16, "width": 320, "zIndex": 9999},
             ),
         ]),
@@ -924,54 +944,64 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
     # ── Ephemeral-storage warning (renders only when the guard tripped) ───────
     _volume_banner(),
 
-    dbc.Row(style={"margin": "0"}, children=[
+    dbc.Row(className="dashboard-shell", style={"margin": "0"}, children=[
 
         # ── Sidebar ───────────────────────────────────────────────────────────
-        dbc.Col(width=2, style={"background": BG2, "borderRight": f"1px solid #30363d",
+        dbc.Col(lg=2, className="dashboard-sidebar", style={"background": BG2, "borderRight": f"1px solid #30363d",
                                  "padding": "16px", "minHeight": "calc(100vh - 56px)",
                                  "overflowY": "auto"}, children=[
+            dbc.Checkbox(id="mobile-filter-toggle", value=False, className="mobile-filter-toggle"),
+            html.Label([
+                html.Span("Filters", className="filter-toggle-title"),
+                html.Span(id="filter-selected-count", className="filter-selected-count"),
+                html.Span("▾", className="filter-toggle-chevron", **{"aria-hidden": "true"}),
+            ], htmlFor="mobile-filter-toggle", className="mobile-filter-label"),
+            html.Div(className="dashboard-filter-body", children=[
 
-            _section_title("Date Range"),
-            dcc.DatePickerRange(
-                id="date-range",
-                start_date=(_now_hkt() - timedelta(days=365)).strftime("%Y-%m-%d"),
-                end_date=_now_hkt().strftime("%Y-%m-%d"),
-                display_format="DD MMM YYYY",
-                style={"fontSize": "12px", "width": "100%"},
-            ),
-            html.Hr(style={"borderColor": "#30363d", "margin": "12px 0"}),
+                _section_title("Date Range"),
+                dcc.DatePickerRange(
+                    id="date-range",
+                    number_of_months_shown=1,
+                    with_portal=True,
+                    start_date=(_now_hkt() - timedelta(days=365)).strftime("%Y-%m-%d"),
+                    end_date=_now_hkt().strftime("%Y-%m-%d"),
+                    display_format="DD MMM YYYY",
+                    style={"fontSize": "12px", "width": "100%"},
+                ),
+                html.Hr(style={"borderColor": "#30363d", "margin": "12px 0"}),
 
-            ticker_checklist(
-                "Semi Companies",
-                SEMI_COMPANIES,
-                ["NVDA", "AMD", "ASML", "AVGO", "QCOM", "MU", "TSM", "INTC"],
-            ),
-            ticker_checklist("Semi ETFs",   SEMI_ETFS,   ["SMH", "SOXX"]),
-            ticker_checklist("Macro / Other",
-                ["TQQQ", "QQQ", "VIX", "USD", "10YTreasury", "Gold", "BTC", "ETH"],
-                ["VIX", "10YTreasury", "Gold"],
-            ),
-            ticker_checklist("Tech / Mixed",
-                ["MSFT", "GOOG", "META", "AAPL", "TSLA", "AMZN", "ORCL", "BRK.A"],
-                [],
-            ),
+                ticker_checklist(
+                    "Semi Companies",
+                    SEMI_COMPANIES,
+                    ["NVDA", "AMD", "ASML", "AVGO", "QCOM", "MU", "TSM", "INTC"],
+                ),
+                ticker_checklist("Semi ETFs",   SEMI_ETFS,   ["SMH", "SOXX"]),
+                ticker_checklist("Macro / Other",
+                    ["TQQQ", "QQQ", "VIX", "USD", "10YTreasury", "Gold", "BTC", "ETH"],
+                    ["VIX", "10YTreasury", "Gold"],
+                ),
+                ticker_checklist("Tech / Mixed",
+                    ["MSFT", "GOOG", "META", "AAPL", "TSLA", "AMZN", "ORCL", "BRK.A"],
+                    [],
+                ),
 
-            html.Hr(style={"borderColor": "#30363d", "margin": "12px 0"}),
+                html.Hr(style={"borderColor": "#30363d", "margin": "12px 0"}),
 
-            dbc.Button("Select All", id="btn-select-all", color="secondary",
-                       outline=True, size="sm", style={"width": "100%", "marginBottom": "6px", "fontSize": "12px"}),
-            dbc.Button("Clear All",  id="btn-clear-all",  color="secondary",
-                       outline=True, size="sm", style={"width": "100%", "fontSize": "12px"}),
+                dbc.Button("Select All", id="btn-select-all", color="secondary",
+                           outline=True, size="sm", style={"width": "100%", "marginBottom": "6px", "fontSize": "12px"}),
+                dbc.Button("Clear All",  id="btn-clear-all",  color="secondary",
+                           outline=True, size="sm", style={"width": "100%", "fontSize": "12px"}),
 
-            # Hidden store for selected tickers
-            dcc.Store(id="selected-tickers", data=[
-                "NVDA", "AMD", "ASML", "AVGO", "QCOM", "MU", "TSM", "INTC",
-                "SMH", "SOXX", "VIX", "10YTreasury"
+                # Hidden store for selected tickers
+                dcc.Store(id="selected-tickers", data=[
+                    "NVDA", "AMD", "ASML", "AVGO", "QCOM", "MU", "TSM", "INTC",
+                    "SMH", "SOXX", "VIX", "10YTreasury"
+                ]),
             ]),
         ]),
 
         # ── Main content ──────────────────────────────────────────────────────
-        dbc.Col(style={"padding": "16px", "overflowY": "auto",
+        dbc.Col(lg=10, className="dashboard-main", style={"padding": "16px", "overflowY": "auto",
                        "maxHeight": "calc(100vh - 56px)"}, children=[
 
             dbc.Tabs(id="main-tabs", active_tab="tab-overview", children=[
@@ -981,7 +1011,7 @@ app.layout = dbc.Container(fluid=True, style={"background": BG, "minHeight": "10
                 dbc.Tab(label="🔄 Cycles",         tab_id="tab-cycles"),
                 dbc.Tab(label="⚖️ Period Compare", tab_id="tab-compare"),
                 dbc.Tab(label="🏭 Supply Chain",   tab_id="tab-supplychain"),
-            ], style={"marginBottom": "16px",
+            ], className="dashboard-tabs", style={"marginBottom": "16px",
                       "--bs-nav-tabs-border-color": "#30363d"}),
 
             dcc.Loading(
@@ -1018,6 +1048,15 @@ def sync_tickers(semi, etfs, macro, tech):
         if lst:
             result.extend(lst)
     return result
+
+
+@app.callback(
+    Output("filter-selected-count", "children"),
+    Input("selected-tickers", "data"),
+)
+def update_filter_selected_count(tickers):
+    count = len(tickers or [])
+    return f"{count} ticker{'s' if count != 1 else ''} selected"
 
 
 @app.callback(
@@ -1122,13 +1161,7 @@ def update_crawl_badge(_):
     it; never nested inside tab-content (§7 rules 3 & 4).
     """
     def _chip(icon, text, colour, tip):
-        return html.Span(
-            [html.Span(icon, style={"marginRight": "4px"}), text],
-            style={"fontSize": "11px", "color": colour,
-                   "border": f"1px solid {colour}", "borderRadius": "4px",
-                   "padding": "2px 8px"},
-            title=tip,
-        )
+        return _status_chip(icon, text, colour, tip)
 
     try:
         conn = get_conn()
@@ -1173,13 +1206,8 @@ def update_freshness_badge(_):
         report = _freshness_report()
         stale  = _stale_sources(report)
     except Exception as exc:
-        return html.Span(
-            [html.Span("⚠️", style={"marginRight": "4px"}), "freshness: error"],
-            style={"fontSize": "11px", "color": YELLOW,
-                   "border": f"1px solid {YELLOW}", "borderRadius": "4px",
-                   "padding": "2px 8px"},
-            title=f"Freshness check failed: {exc}",
-        )
+        return _status_chip("⚠️", "freshness: error", YELLOW,
+                            f"Freshness check failed: {exc}")
 
     # Shape flags are advisory and never override a freshness breach: a stale
     # source is a fact, a suspicious shape is a prompt to look. Red wins over
@@ -1191,26 +1219,15 @@ def update_freshness_badge(_):
     cflags = cons.get("flags", [])
 
     if not stale and not cflags:
-        return html.Span(
-            [html.Span("🟢", style={"marginRight": "4px"}), "data: fresh"],
-            style={"fontSize": "11px", "color": GREEN,
-                   "border": f"1px solid {GREEN}", "borderRadius": "4px",
-                   "padding": "2px 8px"},
-            title=(f"Every tracked source is within its freshness SLA, and "
-                   f"{cons.get('checked', 0)} series passed the shape checks."),
-        )
+        return _status_chip("🟢", "data: fresh", GREEN,
+                            f"Every tracked source is within its freshness SLA, and "
+                            f"{cons.get('checked', 0)} series passed the shape checks.")
 
     if not stale:
         detail = "\n".join(f"{f['series']} [{f['rule']}]: {f['detail']}" for f in cflags)
-        return html.Span(
-            [html.Span("🟡", style={"marginRight": "4px"}),
-             f"{len(cflags)} shape flag{'s' if len(cflags) > 1 else ''}"],
-            style={"fontSize": "11px", "color": YELLOW,
-                   "border": f"1px solid {YELLOW}", "borderRadius": "4px",
-                   "padding": "2px 8px", "cursor": "help"},
-            title=("Every source is fresh, but these series look implausible — "
-                   "verify against the publisher before trusting them:\n\n" + detail),
-        )
+        return _status_chip("🟡", f"{len(cflags)} shape flag{'s' if len(cflags) > 1 else ''}",
+                            YELLOW, "Every source is fresh, but these series look implausible — "
+                            "verify against the publisher before trusting them:\n\n" + detail)
 
     def _why(k):
         r = report[k]
@@ -1221,14 +1238,8 @@ def update_freshness_badge(_):
                 f"(SLA {r['sla_days']}d)")
 
     detail = "\n".join(_why(k) for k in stale)
-    return html.Span(
-        [html.Span("🔴", style={"marginRight": "4px"}),
-         f"{len(stale)} stale/empty source{'s' if len(stale) > 1 else ''}"],
-        style={"fontSize": "11px", "color": RED,
-               "border": f"1px solid {RED}", "borderRadius": "4px",
-               "padding": "2px 8px", "cursor": "help"},
-        title="Sources past their freshness SLA — see /api/db-stats:\n\n" + detail,
-    )
+    return _status_chip("🔴", f"{len(stale)} stale/empty source{'s' if len(stale) > 1 else ''}",
+                        RED, "Sources past their freshness SLA — see /api/db-stats:\n\n" + detail)
 
 
 @app.callback(
@@ -1251,14 +1262,9 @@ def update_ibkr_badge(_):
     )
 
     if latest.empty:
-        return html.Span(
-            [html.Span("⚫", style={"marginRight": "4px"}), "IV: none"],
-            style={"fontSize": "11px", "color": SUBTEXT,
-                   "border": "1px solid #30363d", "borderRadius": "4px",
-                   "padding": "2px 8px", "cursor": "help"},
-            title=("No rows in options_iv.\n"
-                   "Run: python3 iv_crawler.py   (no broker or subscription needed)"),
-        )
+        return _status_chip("⚫", "IV: none", SUBTEXT,
+                            "No rows in options_iv.\nRun: python3 iv_crawler.py "
+                            "(no broker or subscription needed)")
 
     short, desc, published = _iv_source_meta(latest.iloc[0]["source"])
     tickers = int(latest["n"].sum())
@@ -1270,17 +1276,10 @@ def update_ibkr_badge(_):
     # Derived series get YELLOW, published get GREEN. Same convention as the
     # HV30 fallback badge: colour encodes provenance strength, not freshness.
     colour = GREEN if published else YELLOW
-    return html.Span(
-        [html.Span("🟢" if published else "🟡", style={"marginRight": "4px"}),
-         "IV: %s (%d)" % (short, tickers)],
-        style={"fontSize": "11px", "color": colour,
-               "border": f"1px solid {colour}", "borderRadius": "4px",
-               "padding": "2px 8px", "cursor": "help"},
-        title="As of %s\n%s\n\n%s" % (
-            as_of, detail,
-            "Published index." if published
-            else "✳ Derived metric — our own construction, not a published index."),
-    )
+    return _status_chip("🟢" if published else "🟡", "IV: %s (%d)" % (short, tickers),
+                        colour, "As of %s\n%s\n\n%s" % (
+                            as_of, detail, "Published index." if published
+                            else "✳ Derived metric — our own construction, not a published index."))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1297,7 +1296,7 @@ def update_ibkr_badge(_):
 )
 def render_tab(active_tab, tickers, start_date, end_date, _refresh):
     if not tickers:
-        return _card(html.P("Select at least one ticker from the sidebar.", style={"color": SUBTEXT}))
+        return _card(html.P("Select at least one ticker in Filters.", style={"color": SUBTEXT}))
 
     start = start_date[:10] if start_date else "2023-01-01"
     end   = end_date[:10]   if end_date   else _now_hkt().strftime("%Y-%m-%d")
@@ -1352,7 +1351,7 @@ def tab_overview(tickers, start, end):
         delta = (f"+{p1m:.1f}%" if p1m and p1m >= 0 else f"{p1m:.1f}%") if p1m is not None else ""
         col   = GREEN if p1m and p1m >= 0 else RED if p1m and p1m < 0 else TEXT
         kpi_cards.append(
-            dbc.Col(width=2, children=_card(_kpi(tkr, f"${latest:,.2f}", delta, col),
+            dbc.Col(width=2, className="dashboard-kpi-col", children=_card(_kpi(tkr, f"${latest:,.2f}", delta, col),
                                             style={"textAlign": "center"}))
         )
 
@@ -1452,13 +1451,13 @@ def tab_overview(tickers, start, end):
         fig_hm.update_layout(**PLOTLY_TEMPLATE["layout"],
                               title="Return Heatmap",
                               height=max(280, len(tickers) * 30))
-        heatmap_section = dcc.Graph(figure=fig_hm, config={"displayModeBar": False})
+        heatmap_section = _responsive_graph(figure=fig_hm, config={"displayModeBar": False})
     else:
         heatmap_section = html.P("Sentiment data not yet available.", style={"color": SUBTEXT})
 
     return html.Div([
         dbc.Row(kpi_cards, className="g-2", style={"marginBottom": "12px"}),
-        _card(dcc.Graph(figure=fig_price, config={"displayModeBar": True})),
+        _card(_responsive_graph(figure=fig_price, config={"displayModeBar": True})),
         _card(heatmap_section),
         _card(_source_footer("Yahoo Finance / yfinance",
                               "OHLCV daily price data and 1-month performance. "
@@ -1626,7 +1625,7 @@ def tab_financials(tickers):
             title=title + suffix, barmode="group",
             height=320, yaxis_title=title,
         )
-        return dcc.Graph(figure=fig, config={"displayModeBar": False})
+        return _responsive_graph(figure=fig, config={"displayModeBar": False})
 
     def trend_chart(col: str, title: str, pct: bool = False):
         fig = go.Figure()
@@ -1645,7 +1644,7 @@ def tab_financials(tickers):
             title=title + (" (%)" if pct else ""),
             height=280,
         )
-        return dcc.Graph(figure=fig, config={"displayModeBar": False})
+        return _responsive_graph(figure=fig, config={"displayModeBar": False})
 
     # Latest financials table
     #
@@ -1994,10 +1993,10 @@ def tab_sentiment(tickers):
                     style={"color": SUBTEXT, "fontSize": "11px", "fontStyle": "italic"},
                 ),
             ]),
-            _card(dcc.Graph(figure=fig_term, config={"displayModeBar": True})),
+            _card(_responsive_graph(figure=fig_term, config={"displayModeBar": True})),
             dbc.Row([
-                dbc.Col(_card(dcc.Graph(figure=fig_pct, config={"displayModeBar": False})), width=6),
-                dbc.Col(_card(dcc.Graph(figure=fig_ivh, config={"displayModeBar": True})), width=6),
+                dbc.Col(_card(_responsive_graph(figure=fig_pct, config={"displayModeBar": False})), width=6),
+                dbc.Col(_card(_responsive_graph(figure=fig_ivh, config={"displayModeBar": True})), width=6),
             ]),
         ])
 
@@ -2039,7 +2038,7 @@ def tab_sentiment(tickers):
             ) if missing else ""
 
             iv_section = _card([
-                dcc.Graph(figure=fig_iv, config={"displayModeBar": False}),
+                _responsive_graph(figure=fig_iv, config={"displayModeBar": False}),
                 html.Div([
                     html.Span(
                         "⚠️ Source: yfinance ATM snapshot (annualised) — "
@@ -2228,8 +2227,8 @@ def tab_sentiment(tickers):
         _card([_section_title("Sentiment Snapshot"), tbl]),
         iv_section,
         dbc.Row([
-            dbc.Col(_card(dcc.Graph(figure=fig_drop,    config={"displayModeBar": False})), width=6),
-            dbc.Col(_card(dcc.Graph(figure=fig_scatter, config={"displayModeBar": True})),  width=6),
+            dbc.Col(_card(_responsive_graph(figure=fig_drop,    config={"displayModeBar": False})), width=6),
+            dbc.Col(_card(_responsive_graph(figure=fig_scatter, config={"displayModeBar": True})),  width=6),
         ]),
         _card(_source_footer(iv_source,
                               "Performance metrics (5d/10d/1m) from Yahoo Finance / yfinance.")),
@@ -2475,6 +2474,7 @@ def tab_cycles(tickers):
                                                  "marginRight": "8px"}),
             dcc.Dropdown(
                 id="cycles-ticker-select",
+                className="cycle-ticker-select",
                 options=[{"label": t, "value": t} for t in tickers],
                 value=default_ticker,
                 clearable=False,
@@ -2489,17 +2489,17 @@ def tab_cycles(tickers):
             html.Span("▲ Peak  ▼ Trough — % label shows magnitude of each cycle segment",
                       style={"color": SUBTEXT, "fontSize": "11px"}),
         ], style={"marginBottom": "8px"}),
-        dcc.Graph(id="cycles-price-chart", figure=initial_fig,
+        _responsive_graph(id="cycles-price-chart", figure=initial_fig,
                   config={"displayModeBar": True}),
     ])
 
     return html.Div([
         _card([_section_title("Cycle Summary"), tbl]),
         cycle_chart_section,
-        _card(dcc.Graph(figure=fig_mag, config={"displayModeBar": True})),
+        _card(_responsive_graph(figure=fig_mag, config={"displayModeBar": True})),
         dbc.Row([
-            dbc.Col(_card(dcc.Graph(figure=fig_dur, config={"displayModeBar": False})), width=7),
-            dbc.Col(_card(dcc.Graph(figure=fig_vol, config={"displayModeBar": False})), width=5),
+            dbc.Col(_card(_responsive_graph(figure=fig_dur, config={"displayModeBar": False})), width=7),
+            dbc.Col(_card(_responsive_graph(figure=fig_vol, config={"displayModeBar": False})), width=5),
         ]),
         _card(_source_footer("Yahoo Finance / yfinance — scipy.signal.argrelextrema",
                               "Cycle peaks/troughs detected via rolling local extrema "
@@ -2524,6 +2524,8 @@ def tab_compare(tickers):
                     html.Label("Period A", style={"color": SUBTEXT, "fontSize": "12px"}),
                     dcc.DatePickerRange(
                         id="cmp-period-a",
+                        number_of_months_shown=1,
+                        with_portal=True,
                         start_date=(_now_hkt() - timedelta(days=180)).strftime("%Y-%m-%d"),
                         end_date=(_now_hkt() - timedelta(days=91)).strftime("%Y-%m-%d"),
                         display_format="DD MMM YYYY",
@@ -2533,6 +2535,8 @@ def tab_compare(tickers):
                     html.Label("Period B", style={"color": SUBTEXT, "fontSize": "12px"}),
                     dcc.DatePickerRange(
                         id="cmp-period-b",
+                        number_of_months_shown=1,
+                        with_portal=True,
                         start_date=(_now_hkt() - timedelta(days=90)).strftime("%Y-%m-%d"),
                         end_date=_now_hkt().strftime("%Y-%m-%d"),
                         display_format="DD MMM YYYY",
@@ -2630,7 +2634,7 @@ def run_comparison(_, a_start, a_end, b_start, b_end, tickers):
         tickers + [b_start, b_end],
     )
 
-    charts = [_card(dcc.Graph(figure=fig_ret, config={"displayModeBar": True}))]
+    charts = [_card(_responsive_graph(figure=fig_ret, config={"displayModeBar": True}))]
 
     for metric, label in [("rev", "Avg Revenue"), ("gp", "Avg Gross Profit"), ("np", "Avg Net Profit")]:
         if fin_a_rows.empty and fin_b_rows.empty:
@@ -2650,7 +2654,7 @@ def run_comparison(_, a_start, a_end, b_start, b_end, tickers):
         fig_f.update_layout(**PLOTLY_TEMPLATE["layout"],
                              title=f"{label} (USD Bn) — Period A vs B",
                              barmode="group", height=300)
-        charts.append(_card(dcc.Graph(figure=fig_f, config={"displayModeBar": False})))
+        charts.append(_card(_responsive_graph(figure=fig_f, config={"displayModeBar": False})))
 
     return html.Div(charts)
 
@@ -3288,7 +3292,7 @@ def _sc_vs_etf_panel():
         _section_title(f"Enterprise AI Hardware Price Index vs {etf_ticker} ETF — Industry Correlation"),
         _modeled_note("The GPU and CPU price indices on this chart"),
         html.P(note_etf, style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "12px"}),
-        dcc.Graph(figure=fig, config={"displayModeBar": True}),
+        _responsive_graph(figure=fig, config={"displayModeBar": True}),
     ]
 
     if corr_cards:
@@ -3299,7 +3303,7 @@ def _sc_vs_etf_panel():
         ]
 
     if fig_roll is not None:
-        children.append(_card(dcc.Graph(figure=fig_roll, config={"displayModeBar": True})))
+        children.append(_card(_responsive_graph(figure=fig_roll, config={"displayModeBar": True})))
 
     if snapshot_tbl is not None:
         children += [
@@ -3586,7 +3590,7 @@ def _sc_dram_inline(height: int = 360) -> html.Div:
             _section_title("DRAM & HBM Spot / Contract Prices"),
             dram_gap_note,
             dram_note,
-            dcc.Graph(figure=fig, config={"displayModeBar": True}),
+            _responsive_graph(figure=fig, config={"displayModeBar": True}),
         ]),
         _card([
             _section_title("DRAM & HBM — Latest Spot Prices & Year-on-Year Change"),
@@ -3811,8 +3815,8 @@ def _sc_enterprise_gpu_section():
 
     return html.Div([
         dbc.Row([
-            dbc.Col(_card([_modeled_note("Enterprise GPU contract prices (A100 / H100 / H200 / B200 / MI300X)"), dcc.Graph(figure=fig_price, config={"displayModeBar": True})]), width=7),
-            dbc.Col(_card(dcc.Graph(figure=fig_perf,  config={"displayModeBar": True})), width=5),
+            dbc.Col(_card([_modeled_note("Enterprise GPU contract prices (A100 / H100 / H200 / B200 / MI300X)"), _responsive_graph(figure=fig_price, config={"displayModeBar": True})]), width=7),
+            dbc.Col(_card(_responsive_graph(figure=fig_perf,  config={"displayModeBar": True})), width=5),
         ]),
         yoy_section,
         _card(_source_footer(
@@ -4061,8 +4065,8 @@ def _sc_enterprise_cpu_section():
 
     return html.Div([
         dbc.Row([
-            dbc.Col(_card([_modeled_note("Enterprise CPU ODP / contract ASPs (Xeon, EPYC)"), dcc.Graph(figure=fig_price, config={"displayModeBar": True})]), width=7),
-            dbc.Col(_card(dcc.Graph(figure=fig_perf,  config={"displayModeBar": True})), width=5),
+            dbc.Col(_card([_modeled_note("Enterprise CPU ODP / contract ASPs (Xeon, EPYC)"), _responsive_graph(figure=fig_price, config={"displayModeBar": True})]), width=7),
+            dbc.Col(_card(_responsive_graph(figure=fig_perf,  config={"displayModeBar": True})), width=5),
         ]),
         yoy_section,
         _card(_source_footer(
@@ -4093,6 +4097,9 @@ def _sc_enterprise_ram_section():
     - Native-unit DRAM inline section below for context
     """
     df_all = sc_dram_query()
+    if df_all.empty or "product_type" not in df_all.columns:
+        return _card(html.P("No enterprise memory price data available yet.",
+                            style={"color": SUBTEXT}))
     df_mem = df_all[df_all["product_type"].isin(_MEM_SPECS.keys())].copy()
     if not df_mem.empty:
         df_mem = _mem_normalize_usd_per_gb(df_mem)
@@ -4294,8 +4301,8 @@ def _sc_enterprise_ram_section():
 
     return html.Div([
         dbc.Row([
-            dbc.Col(_card(dcc.Graph(figure=fig_price, config={"displayModeBar": True})), width=7),
-            dbc.Col(_card(dcc.Graph(figure=fig_perf,  config={"displayModeBar": True})), width=5),
+            dbc.Col(_card(_responsive_graph(figure=fig_price, config={"displayModeBar": True})), width=7),
+            dbc.Col(_card(_responsive_graph(figure=fig_perf,  config={"displayModeBar": True})), width=5),
         ]),
         yoy_section,
         _card(_source_footer(
@@ -4563,8 +4570,8 @@ def _sc_price_section(category: str):
 
     return html.Div([
         dbc.Row([
-            dbc.Col(_card([_modeled_note("The curated price backbone on this chart"), dcc.Graph(figure=fig_price, config={"displayModeBar": True})]), width=7),
-            dbc.Col(_card(dcc.Graph(figure=fig_pp,    config={"displayModeBar": True})), width=5),
+            dbc.Col(_card([_modeled_note("The curated price backbone on this chart"), _responsive_graph(figure=fig_price, config={"displayModeBar": True})]), width=7),
+            dbc.Col(_card(_responsive_graph(figure=fig_pp,    config={"displayModeBar": True})), width=5),
         ]),
         yoy_section,
         dram_section,
@@ -4676,8 +4683,8 @@ def _sc_steam_panel():
                    "borderRadius": "4px", "backgroundColor": "rgba(255,200,0,0.05)"},
         ),
         dbc.Row([
-            dbc.Col(dcc.Graph(figure=fig,     config={"displayModeBar": False}), width=8),
-            dbc.Col(dcc.Graph(figure=fig_pie, config={"displayModeBar": False}), width=4),
+            dbc.Col(_responsive_graph(figure=fig,     config={"displayModeBar": False}), width=8),
+            dbc.Col(_responsive_graph(figure=fig_pie, config={"displayModeBar": False}), width=4),
         ]),
         html.P(
             "Steam survey reflects installed base of active gamers (~120M users), not monthly units shipped. "
@@ -4806,7 +4813,7 @@ def _sc_demand_panel():
             "BACKLOG SC-00).",
             style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "8px"},
         ),
-        dcc.Graph(figure=fig, config={"displayModeBar": True}),
+        _responsive_graph(figure=fig, config={"displayModeBar": True}),
         html.Div(style={"marginTop": "12px"}),
         tbl,
         _source_footer(
@@ -4916,7 +4923,7 @@ def _sc_fab_metrics_panel():
         _card([
             _section_title("Manufacturer Disclosures"),
             note,
-            dcc.Graph(figure=fig, config={"displayModeBar": True}),
+            _responsive_graph(figure=fig, config={"displayModeBar": True}),
         ]),
         _card([
             _section_title("Disclosure Detail — every figure with its source document"),
@@ -5022,7 +5029,7 @@ def _sc_dram_panel():
             "not absolute levels across series.",
             style={"color": SUBTEXT, "fontSize": "12px", "marginBottom": "10px"},
         ),
-        dcc.Graph(figure=fig, config={"displayModeBar": True}),
+        _responsive_graph(figure=fig, config={"displayModeBar": True}),
         html.Div(style={"marginTop": "12px"}),
         _section_title("Latest Prices & Year-on-Year Change"),
         tbl,

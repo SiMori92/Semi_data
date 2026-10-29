@@ -1,0 +1,93 @@
+/* Dashboard layout. Dash loads files in assets/ without an explicit import. */
+.dashboard-app { min-width: 0; }
+.dashboard-navbar { gap: 12px; flex-wrap: wrap; }
+.dashboard-brand { min-width: 0; overflow-wrap: anywhere; }
+.dashboard-navbar-right { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; min-width: 0; }
+.dashboard-status, .dashboard-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.dashboard-status > span, .dashboard-actions > a, .dashboard-actions > button { margin-left: 0 !important; }
+.dashboard-status > span { display: inline-flex; align-items: center; }
+.dashboard-status-chip { position: relative; font-size: 11px; }
+.dashboard-status-chip summary { list-style: none; border-radius: 4px; padding: 4px 8px; cursor: pointer; white-space: nowrap; }
+.dashboard-status-chip summary::-webkit-details-marker { display: none; }
+.dashboard-status-detail { position: absolute; z-index: 1000; top: calc(100% + 4px); right: 0; width: min(320px, calc(100vw - 24px)); max-height: 60vh; overflow: auto; padding: 12px; color: #e6edf3; background: #21262d; border: 1px solid #8b949e; border-radius: 6px; box-shadow: 0 6px 18px #0008; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
+.dashboard-actions > a, .dashboard-actions > button { min-height: 40px; }
+.dashboard-sidebar, .dashboard-main { min-width: 0; }
+.dashboard-filter-body { min-width: 0; }
+.mobile-filter-toggle, .mobile-filter-label { display: none; }
+.dashboard-card { min-width: 0; overflow-wrap: anywhere; }
+.dashboard-main .js-plotly-plot, .dashboard-main .dash-graph { max-width: 100%; min-width: 0; }
+.dashboard-main .dash-table-container { max-width: 100%; }
+.dashboard-main .dash-table-container .dash-spreadsheet-container { overflow-x: auto; }
+.dashboard-tabs .nav { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.dashboard-tabs .nav-link { white-space: nowrap; }
+.dashboard-main .nav-tabs { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.dashboard-main .nav-tabs .nav-link { white-space: nowrap; }
+.dashboard-filter-body .DateRangePicker, .dashboard-filter-body .DateRangePickerInput { max-width: 100%; }
+.dashboard-filter-body .DateInput_input { width: 100%; }
+.dashboard-filter-body .DateRangePickerInput_arrow { flex: 0 0 auto; }
+.dashboard-app :is(button, a, input, select, summary, .nav-link):focus-visible,
+.dashboard-app .mobile-filter-toggle:has(input:focus-visible) + .mobile-filter-label {
+  outline: 2px solid #58a6ff;
+  outline-offset: 2px;
+}
+
+@media (min-width: 992px) {
+  .dashboard-filter-body .DateRangePickerInput { display: flex; flex-direction: column; width: 100%; }
+  .dashboard-filter-body .DateInput { width: 100%; }
+  .dashboard-filter-body .DateRangePickerInput_arrow { display: none; }
+}
+
+@media (max-width: 991.98px) {
+  .dashboard-app .navbar { padding: 10px 12px !important; }
+  .dashboard-navbar { align-items: stretch; }
+  .dashboard-brand { font-size: 15px !important; line-height: 1.3; }
+  .dashboard-navbar-right { width: 100%; display: block; }
+  .dashboard-status { gap: 6px; margin-bottom: 8px; }
+  .dashboard-status > span { margin-left: 0 !important; }
+  .dashboard-status-chip summary { min-height: 36px; display: flex; align-items: center; }
+  .dashboard-status-detail { position: fixed; top: 80px; left: 12px; right: 12px; width: auto; }
+  .dashboard-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .dashboard-actions > a, .dashboard-actions > button { width: 100%; min-height: 44px; padding: 6px; font-size: 11px !important; white-space: normal; line-height: 1.2; }
+  .dashboard-toast { top: 8px !important; right: 8px !important; width: min(320px, calc(100vw - 16px)) !important; }
+  .dashboard-sidebar { min-height: 0 !important; overflow: visible !important; border-right: 0 !important; border-bottom: 1px solid #30363d; padding: 0 12px !important; }
+  .mobile-filter-toggle { position: absolute; display: block; opacity: 0; width: 1px; height: 1px; }
+  .mobile-filter-label { display: flex; align-items: center; gap: 8px; min-height: 48px; margin: 0; padding: 8px 0; cursor: pointer; color: #e6edf3; font-weight: 600; }
+  .filter-selected-count { margin-left: auto; color: #8b949e; font-size: 12px; font-weight: 400; }
+  .filter-toggle-chevron { transition: transform .15s ease; }
+  .mobile-filter-toggle:has(input:checked) + .mobile-filter-label .filter-toggle-chevron { transform: rotate(180deg); }
+  .dashboard-filter-body { display: none; padding: 8px 0 16px; }
+  .mobile-filter-toggle:has(input:checked) ~ .dashboard-filter-body { display: block; }
+  .dashboard-filter-body .DateRangePicker { max-width: 100%; }
+  .dashboard-filter-body .DateRangePickerInput { display: flex; max-width: 100%; }
+  .dashboard-filter-body .DateInput { width: min(45%, 150px); }
+  .dashboard-filter-body .DateInput_input { width: 100%; font-size: 13px; }
+  .dashboard-filter-body .DateInput_input, .dashboard-main .DateInput_input { min-height: 44px; }
+  .dashboard-filter-body .form-check { min-height: 40px; display: flex; align-items: center; }
+  .dashboard-filter-body .form-check-input { width: 18px; height: 18px; margin-top: 0; }
+  .dashboard-main { max-height: none !important; overflow: visible !important; padding: 12px !important; }
+  .dashboard-card { padding: 12px !important; }
+  .dashboard-main .row > [class*="col-"] { flex: 0 0 100%; width: 100%; max-width: 100%; min-width: 0; }
+  .dashboard-main .row > .dashboard-kpi-col { flex-basis: 50%; width: 50%; max-width: 50%; }
+  .dashboard-main .row { --bs-gutter-y: 8px; }
+  .dashboard-main .nav-tabs .nav-link { min-height: 44px; display: inline-flex; align-items: center; }
+  .dashboard-filter-body button { min-height: 44px; }
+  .dashboard-main .DateRangePicker { max-width: 100%; }
+  .dashboard-main .DateRangePickerInput { max-width: 100%; }
+  .dashboard-main .DateInput { width: min(42vw, 150px); }
+  .dashboard-main .DateInput_input { width: 100%; font-size: 13px; }
+  .dashboard-main .cycle-ticker-select { width: 100% !important; max-width: 300px; display: block !important; margin-top: 6px; }
+  #btn-compare { width: 100%; min-height: 44px; }
+  .DateRangePicker_picker__portal { z-index: 1100; }
+  .dashboard-main .dash-table-container { position: relative; }
+  .dashboard-main .dash-table-container th, .dashboard-main .dash-table-container td { min-height: 40px; }
+  .dashboard-main .dash-table-container button { min-height: 40px; min-width: 40px; }
+  .dashboard-main .dash-table-container::after { content: "Swipe table for more columns →"; display: block; color: #8b949e; font-size: 11px; padding-top: 4px; }
+  .dashboard-main .gtitle, .dashboard-main .xtitle, .dashboard-main .ytitle { overflow-wrap: anywhere; }
+  .dashboard-app .alert, .dashboard-app .toast { overflow-wrap: anywhere; }
+}
+
+@media (max-width: 359.98px) {
+  .dashboard-main .row > .dashboard-kpi-col { flex-basis: 100%; width: 100%; max-width: 100%; }
+  .dashboard-actions { grid-template-columns: 1fr 1fr; }
+  .dashboard-actions > :last-child { grid-column: 1 / -1; }
+}
