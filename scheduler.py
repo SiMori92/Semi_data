@@ -58,6 +58,8 @@ from datetime import datetime
 from config import DB_PATH, now_hkt as _now
 from job_heartbeat import (
     JOB_SPECS,
+    acquire_run_lock,
+    release_run_lock,
     consecutive_failures,
     ensure_schema,
     job_report,
@@ -159,6 +161,9 @@ def run_job(job: str, dry_run: bool = False) -> bool:
         return True
 
     log.info("Starting job '%s' — %s", job, spec["label"])
+    # Wait for any manual crawl (POST /api/run-crawl / ⚡ button) to finish first,
+    # so the two drivers never overlap (BACKLOG WEB-01c).
+    run_lock = acquire_run_lock(blocking=True)
     started = time.time()
     try:
         proc = subprocess.run(
@@ -177,6 +182,9 @@ def run_job(job: str, dry_run: bool = False) -> bool:
     except Exception as exc:                      # noqa: BLE001
         log.error("JOB '%s' could not be started: %s", job, exc)
         return False
+    finally:
+        if run_lock is not None:
+            release_run_lock(run_lock)
 
 
 def tick(dry_run: bool = False) -> list:

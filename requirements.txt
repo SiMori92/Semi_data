@@ -1,12 +1,30 @@
-yfinance>=0.2.40
-pandas>=2.0.0
-openpyxl>=3.1.0
-numpy>=1.24.0
-scipy>=1.11.0
-dash>=2.16.0
-dash-bootstrap-components>=1.5.0
-plotly>=5.18.0
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-ib_insync>=0.9.86
-gunicorn>=21.2.0
+# Pinned 2026-11-09 (BACKLOG WEB-01b) to EXACTLY what production's last build
+# (main@c9db2e4, 2026-10-29) resolved from the old unpinned file — per Python
+# version, because the newest numpy/scipy/pandas need Python >= 3.11/3.12 and
+# production's Nixpacks Python version is not recorded anywhere in the repo. A
+# single flat pin (e.g. numpy==2.5.4) would FAIL the build on Python <= 3.11;
+# these markers reproduce what pip picked for whichever Python Railway uses.
+# Confirmed against the live page: dash 4.4.1, dbc 2.0.4, plotly.js 4.1.1 (plotly 7.1.0).
+# Bump deliberately, then re-run Product/tests/golden_dump.py + the parity suite.
+# Generated from PyPI release dates; verified installable on 3.9–3.13 (linux x86_64).
+yfinance==1.7.0
+pandas==2.3.3; python_version < "3.11"
+pandas==3.1.0; python_version >= "3.11"
+openpyxl==3.1.5
+numpy==2.0.2; python_version < "3.10"
+numpy==2.2.6; python_version >= "3.10" and python_version < "3.11"
+numpy==2.4.6; python_version >= "3.11" and python_version < "3.12"
+numpy==2.5.4; python_version >= "3.12"
+scipy==1.13.1; python_version < "3.10"
+scipy==1.15.3; python_version >= "3.10" and python_version < "3.11"
+scipy==1.17.1; python_version >= "3.11" and python_version < "3.12"
+scipy==1.18.1; python_version >= "3.12"
+dash==4.4.1
+dash-bootstrap-components==2.0.4
+plotly==7.1.0
+requests==2.32.5; python_version < "3.10"
+requests==2.34.2; python_version >= "3.10"
+beautifulsoup4==4.15.0
+ib_insync==0.9.86
+gunicorn==23.0.0; python_version < "3.10"
+gunicorn==26.2.0; python_version >= "3.10"

@@ -35,6 +35,7 @@ from products_config import (
 # IBKR integration (optional — graceful if not installed / not enabled)
 from ibkr_options_crawler import ibkr_is_enabled, init_ibkr_tables
 from job_heartbeat import job_report, overdue_jobs, scheduler_enabled   # QA F-01
+from job_heartbeat import JOB_SPECS, start_manual_run   # WEB-01c
 
 from config import (
     DB_PATH,
@@ -655,8 +656,22 @@ def _card(children, style=None):
 
 
 def _responsive_graph(*args, **kwargs):
-    """Resize Plotly figures with their cards after a viewport or grid change."""
+    """Resize Plotly figures with their cards after a viewport or grid change.
+
+    `responsive=True` makes Plotly fill its CONTAINER, and dcc.Graph's container
+    defaults to 450 px — so without an explicit height every figure rendered at
+    450 px regardless of its own `layout.height` (BACKLOG WEB-01a: the 660-px
+    price chart, the rangeselector headroom from _apply_rangeselector_layout(),
+    and the heatmap that grows 30 px per ticker were all silently squashed).
+    Width still follows the viewport; height follows the figure.
+    """
     kwargs.setdefault("responsive", True)
+    fig = kwargs.get("figure")
+    height = getattr(getattr(fig, "layout", None), "height", None)
+    if height:
+        style = dict(kwargs.get("style") or {})
+        style.setdefault("height", f"{int(height)}px")
+        kwargs["style"] = style
     return dcc.Graph(*args, **kwargs)
 
 
@@ -1109,29 +1124,17 @@ def show_reload_stamp(_):
     prevent_initial_call=True,
 )
 def trigger_crawl(_):
-    """Start a background crawl and notify the user."""
-    import threading, subprocess, sys, os as _os
+    """Start the market + supply-chain crawlers through the shared run lock.
+
+    Same jobs the button always ran (crawler.py --quick, supply_chain_crawler.py),
+    but via job_heartbeat.start_manual_run(): one flock across every gunicorn
+    worker AND the scheduler, so a click can no longer overlap a scheduled crawl
+    (the old per-worker dict could). Still unauthenticated — a public button
+    cannot hold a key; POST /api/run-crawl is the keyed route (BACKLOG WEB-01c).
+    """
     from dash import no_update
-
-    # Check if already running
-    if _crawl_running.get("active"):
+    if not start_manual_run(["market", "supply_chain"]):
         return "Crawl already in progress — please wait.", True, "warning", no_update
-
-    def _run_crawl():
-        _crawl_running["active"] = True
-        try:
-            script_dir = _os.path.dirname(_os.path.abspath(__file__))
-            py = sys.executable
-            subprocess.run([py, _os.path.join(script_dir, "crawler.py"), "--quick"],
-                           timeout=360, cwd=script_dir)
-            subprocess.run([py, _os.path.join(script_dir, "supply_chain_crawler.py")],
-                           timeout=360, cwd=script_dir)
-        except Exception:
-            pass
-        finally:
-            _crawl_running["active"] = False
-
-    threading.Thread(target=_run_crawl, daemon=True).start()
     return (
         "Crawl started — prices & supply-chain data refreshing (~2 min). "
         "Last Crawl timestamp will update when complete.",
@@ -1139,9 +1142,6 @@ def trigger_crawl(_):
         last_crawl_time(),
     )
 
-
-# Module-level dict to track crawl state across gunicorn requests
-_crawl_running: dict = {"active": False}
 
 
 
@@ -1347,7 +1347,8 @@ def tab_overview(tickers, start, end):
             continue
         latest = df["close"].iloc[-1]
         p1m_row = sent[sent["ticker"] == tkr]["perf_1m"].values if not sent.empty else []
-        p1m  = p1m_row[0] if len(p1m_row) > 0 and p1m_row[0] is not None else None
+        # NaN counts as missing too (a float column turns NULL into NaN): no "nan%" (WEB-01 QA).
+        p1m  = p1m_row[0] if len(p1m_row) > 0 and pd.notna(p1m_row[0]) else None
         delta = (f"+{p1m:.1f}%" if p1m and p1m >= 0 else f"{p1m:.1f}%") if p1m is not None else ""
         col   = GREEN if p1m and p1m >= 0 else RED if p1m and p1m < 0 else TEXT
         kpi_cards.append(
@@ -1444,7 +1445,10 @@ def tab_overview(tickers, start, end):
             y=y_labels,
             colorscale=[[0, RED], [0.5, BG3], [1, GREEN]],
             zmid=0,
-            text=hm_data.round(1).astype(str).values + "%",
+            # NULL perf → "—", never "nan%". Under pandas 3 the old
+            # `.astype(str).values + "%"` raised TypeError on any NaN and took
+            # the whole Overview tab down (WEB-01 QA, 2026-11-09).
+            text=hm_data.round(1).map(lambda v: "—" if pd.isna(v) else f"{v}%").values,
             texttemplate="%{text}",
             hovertemplate="<b>%{y}</b><br>%{x}: %{z:.2f}%<extra></extra>",
         ))
@@ -5055,6 +5059,30 @@ from flask import request as flask_request, jsonify, send_file
 # API key for the IBKR relay — set RELAY_API_KEY env var on the cloud host.
 # The same key must be set in ibkr_relay.py on your local machine.
 _RELAY_API_KEY = os.environ.get("RELAY_API_KEY", "")
+
+
+@server.route("/api/run-crawl", methods=["POST"])
+def run_crawl():
+    """Start crawlers on demand (BACKLOG WEB-01c). Write-class route, so a key is
+    REQUIRED — and unlike the older `!= os.environ.get(..., "")` pattern, an
+    unset RELAY_API_KEY refuses everything instead of accepting an empty header.
+
+    Body (optional JSON): {"jobs": ["market", "iv", "supply_chain"]}; default
+    ["market", "supply_chain"] = what the ⚡ button runs. 202 started · 409 a crawl
+    is already running (manual or scheduled) · 400 unknown job · 401 bad key.
+    """
+    key = os.environ.get("RELAY_API_KEY", "")
+    sent = flask_request.headers.get("X-API-Key", "")
+    if not key or not hmac.compare_digest(sent, key):
+        return jsonify({"error": "unauthorized"}), 401
+    body = flask_request.get_json(silent=True) or {}
+    jobs = body.get("jobs", ["market", "supply_chain"])
+    if (not isinstance(jobs, list) or not jobs
+            or not all(isinstance(j, str) and j in JOB_SPECS for j in jobs)):
+        return jsonify({"error": "unknown job", "allowed": list(JOB_SPECS)}), 400
+    if not start_manual_run(jobs):
+        return jsonify({"status": "busy", "detail": "a crawl is already running"}), 409
+    return jsonify({"status": "started", "jobs": jobs}), 202
 
 
 @server.route("/health")

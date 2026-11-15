@@ -45,12 +45,16 @@ Kept dependency-free on purpose (stdlib + sqlite3 only) so every crawler can
 import it without dragging in yfinance/scipy/pandas.
 """
 
+import fcntl
 import os
 import sqlite3
+import subprocess
+import sys
+import threading
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from config import now_hkt as _now_hkt
+from config import DB_PATH, now_hkt as _now_hkt
 
 
 # ── Job catalogue ─────────────────────────────────────────────────────────────
@@ -317,3 +321,75 @@ def scheduler_enabled() -> bool:
     already suppresses in the common case.
     """
     return os.environ.get("SEMI_DISABLE_SCHEDULER", "0") != "1"
+
+
+# ── Per-RUN lock (BACKLOG WEB-01c) ────────────────────────────────────────────
+# Distinct from scheduler.py's SINGLETON lock, which the watchdog holds for its
+# whole lifetime. This one is held only while a crawler subprocess runs, and is
+# taken by BOTH drivers: scheduler.run_job() waits for it; a manual run
+# (POST /api/run-crawl, or the ⚡ Run Crawl button) refuses if it is held. So a
+# manual crawl can no longer overlap a scheduled one, across gunicorn workers.
+# Lives beside the DB, i.e. on the volume — same rule as .scheduler.lock.
+RUN_LOCK_PATH = os.environ.get(
+    "SEMI_CRAWL_RUN_LOCK", os.path.join(os.path.dirname(DB_PATH) or ".", ".crawl_run.lock")
+)
+_REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def acquire_run_lock(blocking: bool):
+    """Return the held lock file object, or None if (non-blocking and) busy."""
+    fh = open(RUN_LOCK_PATH, "a")
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        return fh
+    except (OSError, IOError):
+        fh.close()
+        return None
+
+
+def release_run_lock(fh) -> None:
+    try:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+    finally:
+        fh.close()
+
+
+def run_crawler(job: str) -> int:
+    """Run one JOB_SPECS crawler as a subprocess; return its exit code.
+    The crawler writes its own heartbeat, exactly as under the scheduler."""
+    spec = JOB_SPECS[job]
+    try:
+        return subprocess.run([sys.executable] + spec["argv"], cwd=_REPO_DIR,
+                              timeout=spec["timeout_sec"]).returncode
+    except subprocess.TimeoutExpired:
+        return -1
+
+
+def start_manual_run(jobs: List[str]) -> bool:
+    """Start `jobs` (in order) in a background thread under the run lock.
+    Returns False — and starts nothing — if a crawl is already running."""
+    unknown = [j for j in jobs if j not in JOB_SPECS]
+    if unknown:
+        raise ValueError(f"unknown job(s): {unknown}")
+    fh = acquire_run_lock(blocking=False)
+    if fh is None:
+        return False
+
+    def _go():
+        try:
+            for j in jobs:
+                print(f"[{datetime.utcnow():%Y-%m-%d %H:%M:%S}] manual crawl: {j} rc={run_crawler(j)}", flush=True)
+        finally:
+            release_run_lock(fh)
+
+    threading.Thread(target=_go, name="manual-crawl", daemon=True).start()
+    return True
+
+
+def crawl_running() -> bool:
+    """True while any driver holds the run lock (non-destructive probe)."""
+    fh = acquire_run_lock(blocking=False)
+    if fh is None:
+        return True
+    release_run_lock(fh)
+    return False
