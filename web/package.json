@@ -1,0 +1,28 @@
+{
+  "name": "semi-tracker-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WEB-01 — Next.js/TypeScript/Zod UI. Public on $PORT; proxies /health and /api/* to gunicorn (internal). Read-only on the DB. Tests live in Product/next_rebuild (supplemental).",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "next build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.3",
+    "next": "16.4.3",
+    "plotly.js-dist-min": "4.1.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "26.6.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "5.9.3"
+  }
+}

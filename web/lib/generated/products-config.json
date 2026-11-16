@@ -1,0 +1,611 @@
+{
+ "GPU_PRODUCTS": {
+  "RTX-4090": {
+   "name": "NVIDIA GeForce RTX 4090",
+   "brand": "NVIDIA",
+   "category": "GPU",
+   "node": "4nm (TSMC N4)",
+   "manufacturer": "TSMC",
+   "vram_gb": 24,
+   "msrp_usd": 1599,
+   "newegg_q": "rtx+4090",
+   "passmark_kw": "RTX 4090"
+  },
+  "RTX-4080-Super": {
+   "name": "NVIDIA GeForce RTX 4080 Super",
+   "brand": "NVIDIA",
+   "category": "GPU",
+   "node": "4nm (TSMC N4)",
+   "manufacturer": "TSMC",
+   "vram_gb": 16,
+   "msrp_usd": 999,
+   "newegg_q": "rtx+4080+super",
+   "passmark_kw": "RTX 4080 Super"
+  },
+  "RTX-4070-Ti-Super": {
+   "name": "NVIDIA GeForce RTX 4070 Ti Super",
+   "brand": "NVIDIA",
+   "category": "GPU",
+   "node": "4nm (TSMC N4)",
+   "manufacturer": "TSMC",
+   "vram_gb": 16,
+   "msrp_usd": 799,
+   "newegg_q": "rtx+4070+ti+super",
+   "passmark_kw": "RTX 4070 Ti Super"
+  },
+  "RTX-4070-Super": {
+   "name": "NVIDIA GeForce RTX 4070 Super",
+   "brand": "NVIDIA",
+   "category": "GPU",
+   "node": "4nm (TSMC N4)",
+   "manufacturer": "TSMC",
+   "vram_gb": 12,
+   "msrp_usd": 599,
+   "newegg_q": "rtx+4070+super",
+   "passmark_kw": "RTX 4070 Super"
+  },
+  "RTX-4060-Ti": {
+   "name": "NVIDIA GeForce RTX 4060 Ti",
+   "brand": "NVIDIA",
+   "category": "GPU",
+   "node": "4nm (TSMC N4)",
+   "manufacturer": "TSMC",
+   "vram_gb": 8,
+   "msrp_usd": 399,
+   "newegg_q": "rtx+4060+ti",
+   "passmark_kw": "RTX 4060 Ti"
+  },
+  "RTX-4060": {
+   "name": "NVIDIA GeForce RTX 4060",
+   "brand": "NVIDIA",
+   "category": "GPU",
+   "node": "4nm (TSMC N4)",
+   "manufacturer": "TSMC",
+   "vram_gb": 8,
+   "msrp_usd": 299,
+   "newegg_q": "rtx+4060",
+   "passmark_kw": "RTX 4060"
+  },
+  "RX-7900-XTX": {
+   "name": "AMD Radeon RX 7900 XTX",
+   "brand": "AMD",
+   "category": "GPU",
+   "node": "5nm (TSMC N5)",
+   "manufacturer": "TSMC",
+   "vram_gb": 24,
+   "msrp_usd": 999,
+   "newegg_q": "rx+7900+xtx",
+   "passmark_kw": "RX 7900 XTX"
+  },
+  "RX-7800-XT": {
+   "name": "AMD Radeon RX 7800 XT",
+   "brand": "AMD",
+   "category": "GPU",
+   "node": "6nm (TSMC N6)",
+   "manufacturer": "TSMC",
+   "vram_gb": 16,
+   "msrp_usd": 499,
+   "newegg_q": "rx+7800+xt",
+   "passmark_kw": "RX 7800 XT"
+  },
+  "RX-7600": {
+   "name": "AMD Radeon RX 7600",
+   "brand": "AMD",
+   "category": "GPU",
+   "node": "6nm (TSMC N6)",
+   "manufacturer": "TSMC",
+   "vram_gb": 8,
+   "msrp_usd": 269,
+   "newegg_q": "rx+7600",
+   "passmark_kw": "RX 7600"
+  },
+  "RTX-3090": {
+   "name": "NVIDIA GeForce RTX 3090",
+   "brand": "NVIDIA",
+   "category": "GPU",
+   "node": "8nm (Samsung)",
+   "manufacturer": "Samsung",
+   "vram_gb": 24,
+   "msrp_usd": 1499,
+   "newegg_q": null,
+   "passmark_kw": null
+  },
+  "RX-6900-XT": {
+   "name": "AMD Radeon RX 6900 XT",
+   "brand": "AMD",
+   "category": "GPU",
+   "node": "7nm (TSMC N7)",
+   "manufacturer": "TSMC",
+   "vram_gb": 16,
+   "msrp_usd": 999,
+   "newegg_q": null,
+   "passmark_kw": null
+  },
+  "Arc-B580": {
+   "name": "Intel Arc B580",
+   "brand": "Intel",
+   "category": "GPU",
+   "node": "5nm (TSMC N5)",
+   "manufacturer": "TSMC",
+   "vram_gb": 12,
+   "msrp_usd": 249,
+   "newegg_q": "arc+b580",
+   "passmark_kw": "Arc B580"
+  }
+ },
+ "GPU_ENTERPRISE_PRODUCTS": {
+  "A100-SXM4-80GB": {
+   "name": "NVIDIA A100 SXM4 80GB",
+   "brand": "NVIDIA",
+   "category": "GPU-Enterprise",
+   "node": "7nm (TSMC N7A)",
+   "manufacturer": "TSMC",
+   "vram_gb": 80,
+   "msrp_usd": 10000,
+   "newegg_q": null,
+   "passmark_kw": null,
+   "tflops_fp16_dense": 312,
+   "note": "Ampere. GA Nov 2020. Industry AI training standard through 2022."
+  },
+  "H100-SXM5-80GB": {
+   "name": "NVIDIA H100 SXM5 80GB",
+   "brand": "NVIDIA",
+   "category": "GPU-Enterprise",
+   "node": "4nm (TSMC N4)",
+   "manufacturer": "TSMC",
+   "vram_gb": 80,
+   "msrp_usd": 30000,
+   "newegg_q": null,
+   "passmark_kw": null,
+   "tflops_fp16_dense": 494,
+   "note": "Hopper. GA Nov 2022. Flagship AI GPU 2023–2024; severe shortage in 2023 AI boom."
+  },
+  "H200-SXM-141GB": {
+   "name": "NVIDIA H200 SXM 141GB",
+   "brand": "NVIDIA",
+   "category": "GPU-Enterprise",
+   "node": "4nm (TSMC N4)",
+   "manufacturer": "TSMC",
+   "vram_gb": 141,
+   "msrp_usd": 38000,
+   "newegg_q": null,
+   "passmark_kw": null,
+   "tflops_fp16_dense": 494,
+   "note": "H100 die + HBM3e (141 GB). Announced Nov 2023, GA Q2 2024."
+  },
+  "B200-SXM-192GB": {
+   "name": "NVIDIA B200 SXM 192GB",
+   "brand": "NVIDIA",
+   "category": "GPU-Enterprise",
+   "node": "4nm (TSMC N4P)",
+   "manufacturer": "TSMC",
+   "vram_gb": 192,
+   "msrp_usd": 40000,
+   "newegg_q": null,
+   "passmark_kw": null,
+   "tflops_fp16_dense": 1125,
+   "note": "Blackwell. Announced GTC Mar 2024, GA Q4 2024. Next-gen AI training flagship."
+  },
+  "MI300X-192GB": {
+   "name": "AMD Instinct MI300X 192GB",
+   "brand": "AMD",
+   "category": "GPU-Enterprise",
+   "node": "5nm (TSMC N5)",
+   "manufacturer": "TSMC",
+   "vram_gb": 192,
+   "msrp_usd": 15000,
+   "newegg_q": null,
+   "passmark_kw": null,
+   "tflops_fp16_dense": 1307,
+   "note": "CDNA3 chiplet. GA Jan 2024. Primary H100 alternative; strong inference workload."
+  }
+ },
+ "CPU_PRODUCTS": {
+  "i9-14900K": {
+   "name": "Intel Core i9-14900K",
+   "brand": "Intel",
+   "category": "CPU",
+   "node": "Intel 7 (10nm ESF)",
+   "manufacturer": "Intel Fab Oregon/Israel",
+   "cores": 24,
+   "tdp_w": 125,
+   "socket": "LGA1700",
+   "msrp_usd": 589,
+   "newegg_q": "i9-14900k",
+   "passmark_kw": "Intel Core i9-14900K"
+  },
+  "i7-14700K": {
+   "name": "Intel Core i7-14700K",
+   "brand": "Intel",
+   "category": "CPU",
+   "node": "Intel 7 (10nm ESF)",
+   "manufacturer": "Intel Fab Oregon/Israel",
+   "cores": 20,
+   "tdp_w": 125,
+   "socket": "LGA1700",
+   "msrp_usd": 409,
+   "newegg_q": "i7-14700k",
+   "passmark_kw": "Intel Core i7-14700K"
+  },
+  "i5-14600K": {
+   "name": "Intel Core i5-14600K",
+   "brand": "Intel",
+   "category": "CPU",
+   "node": "Intel 7 (10nm ESF)",
+   "manufacturer": "Intel Fab Oregon/Israel",
+   "cores": 14,
+   "tdp_w": 125,
+   "socket": "LGA1700",
+   "msrp_usd": 319,
+   "newegg_q": "i5-14600k",
+   "passmark_kw": "Intel Core i5-14600K"
+  },
+  "i9-285K": {
+   "name": "Intel Core Ultra 9 285K",
+   "brand": "Intel",
+   "category": "CPU",
+   "node": "3nm (TSMC N3B) + Intel 20A",
+   "manufacturer": "TSMC + Intel",
+   "cores": 24,
+   "tdp_w": 125,
+   "socket": "LGA1851",
+   "msrp_usd": 589,
+   "newegg_q": "core+ultra+9+285k",
+   "passmark_kw": "Intel Core Ultra 9 285K"
+  },
+  "R9-7950X": {
+   "name": "AMD Ryzen 9 7950X",
+   "brand": "AMD",
+   "category": "CPU",
+   "node": "5nm (TSMC N5)",
+   "manufacturer": "TSMC",
+   "cores": 16,
+   "tdp_w": 170,
+   "socket": "AM5",
+   "msrp_usd": 699,
+   "newegg_q": "ryzen+9+7950x",
+   "passmark_kw": "AMD Ryzen 9 7950X"
+  },
+  "R9-7900X": {
+   "name": "AMD Ryzen 9 7900X",
+   "brand": "AMD",
+   "category": "CPU",
+   "node": "5nm (TSMC N5)",
+   "manufacturer": "TSMC",
+   "cores": 12,
+   "tdp_w": 170,
+   "socket": "AM5",
+   "msrp_usd": 449,
+   "newegg_q": "ryzen+9+7900x",
+   "passmark_kw": "AMD Ryzen 9 7900X"
+  },
+  "R7-7800X3D": {
+   "name": "AMD Ryzen 7 7800X3D",
+   "brand": "AMD",
+   "category": "CPU",
+   "node": "5nm (TSMC N5) + 3D V-Cache",
+   "manufacturer": "TSMC",
+   "cores": 8,
+   "tdp_w": 120,
+   "socket": "AM5",
+   "msrp_usd": 449,
+   "newegg_q": "ryzen+7+7800x3d",
+   "passmark_kw": "AMD Ryzen 7 7800X3D"
+  },
+  "R5-7600X": {
+   "name": "AMD Ryzen 5 7600X",
+   "brand": "AMD",
+   "category": "CPU",
+   "node": "5nm (TSMC N5)",
+   "manufacturer": "TSMC",
+   "cores": 6,
+   "tdp_w": 105,
+   "socket": "AM5",
+   "msrp_usd": 299,
+   "newegg_q": "ryzen+5+7600x",
+   "passmark_kw": "AMD Ryzen 5 7600X"
+  },
+  "R9-5950X": {
+   "name": "AMD Ryzen 9 5950X",
+   "brand": "AMD",
+   "category": "CPU",
+   "node": "7nm (TSMC N7)",
+   "manufacturer": "TSMC",
+   "cores": 16,
+   "tdp_w": 105,
+   "socket": "AM4",
+   "msrp_usd": 799,
+   "newegg_q": null,
+   "passmark_kw": null
+  },
+  "i9-12900K": {
+   "name": "Intel Core i9-12900K",
+   "brand": "Intel",
+   "category": "CPU",
+   "node": "Intel 7 (10nm ESF)",
+   "manufacturer": "Intel Fab Oregon",
+   "cores": 16,
+   "tdp_w": 125,
+   "socket": "LGA1700",
+   "msrp_usd": 589,
+   "newegg_q": null,
+   "passmark_kw": null
+  },
+  "R9-9950X": {
+   "name": "AMD Ryzen 9 9950X",
+   "brand": "AMD",
+   "category": "CPU",
+   "node": "4nm (TSMC N4)",
+   "manufacturer": "TSMC",
+   "cores": 16,
+   "tdp_w": 170,
+   "socket": "AM5",
+   "msrp_usd": 649,
+   "newegg_q": "ryzen+9+9950x",
+   "passmark_kw": "AMD Ryzen 9 9950X"
+  },
+  "R7-9700X": {
+   "name": "AMD Ryzen 7 9700X",
+   "brand": "AMD",
+   "category": "CPU",
+   "node": "4nm (TSMC N4)",
+   "manufacturer": "TSMC",
+   "cores": 8,
+   "tdp_w": 65,
+   "socket": "AM5",
+   "msrp_usd": 359,
+   "newegg_q": "ryzen+7+9700x",
+   "passmark_kw": "AMD Ryzen 7 9700X"
+  }
+ },
+ "CPU_ENTERPRISE_PRODUCTS": {
+  "EPYC-9654": {
+   "name": "AMD EPYC 9654 (96-core, Genoa)",
+   "brand": "AMD",
+   "category": "CPU-Enterprise",
+   "node": "5nm (TSMC N5)",
+   "manufacturer": "TSMC",
+   "cores": 96,
+   "tdp_w": 360,
+   "socket": "SP5",
+   "msrp_usd": 11805,
+   "newegg_q": null,
+   "passmark_kw": null,
+   "note": "Genoa (Zen 4). GA Nov 2022. Highest-core-count x86 server CPU at launch."
+  },
+  "Xeon-8490H": {
+   "name": "Intel Xeon Platinum 8490H (60-core, Sapphire Rapids)",
+   "brand": "Intel",
+   "category": "CPU-Enterprise",
+   "node": "Intel 7 (10nm ESF)",
+   "manufacturer": "Intel",
+   "cores": 60,
+   "tdp_w": 350,
+   "socket": "LGA4677",
+   "msrp_usd": 17000,
+   "newegg_q": null,
+   "passmark_kw": null,
+   "note": "Sapphire Rapids (SPR). GA Jan 2023. Intel 4th Gen Xeon Scalable flagship."
+  },
+  "Xeon-8592+": {
+   "name": "Intel Xeon Platinum 8592+ (60-core, Emerald Rapids)",
+   "brand": "Intel",
+   "category": "CPU-Enterprise",
+   "node": "Intel 7 (10nm ESF)",
+   "manufacturer": "Intel",
+   "cores": 60,
+   "tdp_w": 350,
+   "socket": "LGA4677",
+   "msrp_usd": 17000,
+   "newegg_q": null,
+   "passmark_kw": null,
+   "note": "Emerald Rapids (EMR). GA Jan 2024. Drop-in upgrade on SPR platform."
+  },
+  "EPYC-9965": {
+   "name": "AMD EPYC 9965 (192-core, Turin)",
+   "brand": "AMD",
+   "category": "CPU-Enterprise",
+   "node": "3nm (TSMC N3E) + N4",
+   "manufacturer": "TSMC",
+   "cores": 192,
+   "tdp_w": 500,
+   "socket": "SP5",
+   "msrp_usd": 14813,
+   "newegg_q": null,
+   "passmark_kw": null,
+   "note": "Turin (Zen 5). GA Oct 2024. World's first 192-core server CPU."
+  }
+ },
+ "RAM_PRODUCTS": {
+  "DDR5-5600-32GB": {
+   "name": "DDR5-5600 32GB Kit (2×16GB)",
+   "category": "RAM",
+   "type": "DDR5",
+   "speed_mhz": 5600,
+   "capacity_gb": 32,
+   "config": "2×16GB",
+   "maker": "Samsung / SK Hynix / Micron",
+   "msrp_usd": 95,
+   "newegg_q": "ddr5+5600+32gb"
+  },
+  "DDR5-6000-32GB": {
+   "name": "DDR5-6000 32GB Kit (2×16GB)",
+   "category": "RAM",
+   "type": "DDR5",
+   "speed_mhz": 6000,
+   "capacity_gb": 32,
+   "config": "2×16GB",
+   "maker": "Samsung / SK Hynix / Micron",
+   "msrp_usd": 110,
+   "newegg_q": "ddr5+6000+32gb"
+  },
+  "DDR5-6400-64GB": {
+   "name": "DDR5-6400 64GB Kit (2×32GB)",
+   "category": "RAM",
+   "type": "DDR5",
+   "speed_mhz": 6400,
+   "capacity_gb": 64,
+   "config": "2×32GB",
+   "maker": "Samsung / SK Hynix / Micron",
+   "msrp_usd": 185,
+   "newegg_q": "ddr5+6400+64gb"
+  },
+  "DDR4-3600-32GB": {
+   "name": "DDR4-3600 32GB Kit (2×16GB)",
+   "category": "RAM",
+   "type": "DDR4",
+   "speed_mhz": 3600,
+   "capacity_gb": 32,
+   "config": "2×16GB",
+   "maker": "Samsung / SK Hynix / Micron",
+   "msrp_usd": 60,
+   "newegg_q": "ddr4+3600+32gb"
+  },
+  "DDR4-3200-16GB": {
+   "name": "DDR4-3200 16GB Kit (2×8GB)",
+   "category": "RAM",
+   "type": "DDR4",
+   "speed_mhz": 3200,
+   "capacity_gb": 16,
+   "config": "2×8GB",
+   "maker": "Samsung / SK Hynix / Micron",
+   "msrp_usd": 35,
+   "newegg_q": "ddr4+3200+16gb"
+  },
+  "HBM3E-96GB": {
+   "name": "HBM3E 96GB Stack (12-Hi)",
+   "category": "RAM",
+   "type": "HBM3E",
+   "speed_mhz": 9200,
+   "capacity_gb": 96,
+   "config": "12-Hi Stack",
+   "maker": "SK Hynix (primary) / Samsung / Micron",
+   "msrp_usd": null,
+   "newegg_q": null,
+   "note": "Sold exclusively to hyperscalers / AI chip OEMs. Spot price per GB tracked."
+  },
+  "HBM3-48GB": {
+   "name": "HBM3 48GB Stack (8-Hi)",
+   "category": "RAM",
+   "type": "HBM3",
+   "speed_mhz": 6400,
+   "capacity_gb": 48,
+   "config": "8-Hi Stack",
+   "maker": "SK Hynix / Samsung",
+   "msrp_usd": null,
+   "newegg_q": null
+  },
+  "LPDDR5X-32GB": {
+   "name": "LPDDR5X-8448 32GB (Mobile AI)",
+   "category": "RAM",
+   "type": "LPDDR5X",
+   "speed_mhz": 8448,
+   "capacity_gb": 32,
+   "config": "Soldered",
+   "maker": "Samsung / SK Hynix / Micron",
+   "msrp_usd": null,
+   "newegg_q": null,
+   "note": "Used in AI-capable laptops / Snapdragon X Elite / Apple M-series."
+  }
+ },
+ "ENTERPRISE_PRODUCT_LAUNCHES": [
+  [
+   "GPU",
+   "H100 GA",
+   "NVIDIA H100 SXM5 80GB (Hopper) GA",
+   "2022-11-01"
+  ],
+  [
+   "GPU",
+   "MI300X GA",
+   "AMD Instinct MI300X 192GB (CDNA3) GA",
+   "2024-01-01"
+  ],
+  [
+   "GPU",
+   "H200 GA",
+   "NVIDIA H200 SXM 141GB (Hopper+, HBM3e) GA",
+   "2024-06-01"
+  ],
+  [
+   "GPU",
+   "B200 GA",
+   "NVIDIA B200 SXM 192GB (Blackwell) GA",
+   "2024-12-01"
+  ],
+  [
+   "CPU",
+   "Genoa GA",
+   "AMD EPYC 9654 Genoa (Zen 4, 96-core) GA",
+   "2022-11-01"
+  ],
+  [
+   "CPU",
+   "SPR GA",
+   "Intel Xeon Platinum 8490H (Sapphire Rapids) GA",
+   "2023-01-01"
+  ],
+  [
+   "CPU",
+   "EMR GA",
+   "Intel Xeon Platinum 8592+ (Emerald Rapids) GA",
+   "2024-01-01"
+  ],
+  [
+   "CPU",
+   "Turin GA",
+   "AMD EPYC 9965 Turin (Zen 5, 192-core) GA",
+   "2024-10-01"
+  ],
+  [
+   "RAM",
+   "HBM3E ramp",
+   "HBM3E 12-Hi 96GB stack production ramp (SK Hynix)",
+   "2024-01-01"
+  ]
+ ],
+ "SRC_PUBLISHED": "TrendForce (public release)",
+ "SRC_MODELED": "Modeled estimate",
+ "DEMAND_INDICATOR_META": {
+  "tsmc_revenue": {
+   "label": "TSMC Monthly Revenue",
+   "unit": "NT$B",
+   "period_type": "month",
+   "org": "TSMC IR",
+   "cadence": "Monthly, ~10th of the month",
+   "url": "https://investor.tsmc.com/english/monthly-revenue"
+  },
+  "umc_revenue": {
+   "label": "UMC Monthly Revenue",
+   "unit": "NT$B",
+   "period_type": "month",
+   "org": "UMC IR",
+   "cadence": "Monthly, by the 10th",
+   "url": "https://www.umc.com/en/IR_Financial/monthly_sales_revenue"
+  },
+  "korea_chip_exports_20d": {
+   "label": "Korea Semiconductor Exports (1st 20 days)",
+   "unit": "USD B",
+   "period_type": "month",
+   "org": "Korea MOTIE / KITA",
+   "cadence": "~3x/month (10-day, 20-day, full-month customs releases)",
+   "url": null
+  },
+  "wsts_billings": {
+   "label": "WSTS Global Semiconductor Sales",
+   "unit": "USD B",
+   "period_type": "month",
+   "org": "WSTS / SIA",
+   "cadence": "Monthly (3-month moving average)",
+   "url": "https://www.semiconductors.org/policies/tax/market-data/"
+  },
+  "semi_wwsems_billings": {
+   "label": "SEMI WWSEMS Equipment Billings",
+   "unit": "USD B",
+   "period_type": "quarter",
+   "org": "SEMI",
+   "cadence": "Quarterly",
+   "url": "https://www.semi.org/en/products-services/market-data/equipment-article-archive"
+  }
+ }
+}

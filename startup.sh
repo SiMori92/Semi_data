@@ -145,5 +145,61 @@ else
     echo "=== Watchdog SKIPPED — storage is ephemeral (see volume guard above) ==="
 fi
 
-# ── Start the web server ──────────────────────────────────────────────────────
-exec gunicorn dashboard:server --bind "0.0.0.0:$PORT" --workers 2 --timeout 120
+# ── Start the web server(s) — WEB-01 Phase 4 cutover ──────────────────────────
+# Strangler layout: Next.js (web/, built by nixpacks.toml) is PUBLIC on $PORT and
+# serves the UI; gunicorn moves to an INTERNAL port and keeps serving /health and
+# every /api/* route unchanged — Next proxies those paths to it (web/next.config.ts),
+# so the healthcheck, backup_local.sh and the relay see byte-identical responses.
+#
+# ROLLBACK WITHOUT AN UPLOAD: set Railway Variable SEMI_UI=classic and redeploy —
+# gunicorn then binds $PORT exactly as before the cutover. The same fallback fires
+# automatically if node or the Next build is missing, so a broken web build can
+# never take the API down with it. Next is read-only on the DB, so there is no
+# data step in either direction.
+WEB_SERVER="web/.next/standalone/server.js"
+UI_MODE="${SEMI_UI:-next}"
+if [ "$UI_MODE" != "classic" ]; then
+    if ! command -v node >/dev/null 2>&1; then
+        echo "!!! node not found — falling back to the classic Dash UI on \$PORT !!!"
+        UI_MODE="classic"
+    elif [ ! -f "$WEB_SERVER" ]; then
+        echo "!!! $WEB_SERVER missing (web build did not run?) — falling back to the classic Dash UI !!!"
+        UI_MODE="classic"
+    fi
+fi
+
+if [ "$UI_MODE" != "classic" ] && [ "$PORT" = "8051" ]; then
+    echo "!!! \$PORT is 8051, the internal API port — falling back to the classic Dash UI !!!"
+    UI_MODE="classic"
+fi
+
+if [ "$UI_MODE" = "classic" ]; then
+    echo "=== UI: classic (gunicorn on public \$PORT) ==="
+    exec gunicorn dashboard:server --bind "0.0.0.0:$PORT" --workers 2 --timeout 120
+fi
+
+# 8051 is ALSO baked into the web build: Next resolves its /health + /api/* rewrites at
+# build time (web/next.config.ts). Never make this port configurable here alone — a
+# mismatch makes /health return 500 and the deploy fail its healthcheck.
+CLASSIC_PORT=8051
+export CLASSIC_ORIGIN="http://127.0.0.1:$CLASSIC_PORT"
+echo "=== UI: next (public :$PORT) -> API: gunicorn (internal $CLASSIC_ORIGIN) ==="
+
+gunicorn dashboard:server --bind "127.0.0.1:$CLASSIC_PORT" --workers 2 --timeout 120 &
+GUNICORN_PID=$!
+# HOSTNAME must be set explicitly: Next's standalone server binds to $HOSTNAME,
+# which a container otherwise sets to its own hostname.
+HOSTNAME=0.0.0.0 PORT="$PORT" node "$WEB_SERVER" &
+NODE_PID=$!
+
+# This shell stays PID 1 and supervises both. If EITHER exits, stop the other
+# and exit non-zero, so Railway's ON_FAILURE restart policy brings the whole
+# container back rather than leaving a UI with no API (or an API with no UI).
+trap 'kill -TERM "$GUNICORN_PID" "$NODE_PID" 2>/dev/null || true; wait || true; exit 0' TERM INT
+while kill -0 "$GUNICORN_PID" 2>/dev/null && kill -0 "$NODE_PID" 2>/dev/null; do
+    sleep 5
+done
+echo "!!! a web process exited (gunicorn alive: $(kill -0 "$GUNICORN_PID" 2>/dev/null && echo yes || echo no), node alive: $(kill -0 "$NODE_PID" 2>/dev/null && echo yes || echo no)) — restarting container !!!"
+kill -TERM "$GUNICORN_PID" "$NODE_PID" 2>/dev/null || true
+wait || true
+exit 1

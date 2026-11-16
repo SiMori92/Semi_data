@@ -1,0 +1,9 @@
+/* Rebuild-only additions. Everything visual that Dash produced comes from
+   bootswatch DARKLY + responsive.css; this file only covers what Dash's own
+   components rendered and plain HTML does not. */
+body { background: #0d1117; }
+.semi-daterange { display: flex; flex-direction: column; gap: 4px; }
+.semi-daterange input { background: #fff; color: #222; border: 1px solid #ccc; border-radius: 4px; padding: 4px 6px; font-size: 12px; width: 100%; }
+.dashboard-tabs .nav-link { cursor: pointer; }
+.semi-port-pending { color: #8b949e; }
+.semi-compare .semi-daterange { flex-direction: row; }
