@@ -38,8 +38,8 @@ Decisions: D-1…D-8 (2026-11-09); **cutover signed off by Simpo 2026-11-16** (N
 |---|---|
 | 0–3 | done (84/84, 0 browser diffs — 2026-11-09) |
 | WEB-01a/b/c + Overview NULL fix | **in prod** — GitHub `main@0d1ae85` (2026-11-15); `POST /api/run-crawl` → 401 unkeyed, confirmed 2026-11-16 |
-| 4 — cutover | 1st upload `main@2abb93e` (2026-11-16) served **classic** (`node not found`): Railway builds from the `Dockerfile`, not Nixpacks (§9 WEB-01e). Fix = Dockerfile `web` stage; 2nd upload failed at `npm ci` (§9 WEB-01f) → `--ignore-scripts`, **ready to upload** (3rd manifest 2026-11-16). NOT yet verified in prod |
-| 5 — retirement | **blocked on Phase 4 verified in prod** — see plan below |
+| 4 — cutover | **in prod** 2026-11-16 (Dockerfile build — §9 WEB-01e/f). Post-deploy checks 1–4 passed (build, boot line, /health + tabs + auth + exports, ⚡ + ⬇️ by Simpo). **Open: check 5** (scheduled backup — blocked on RE-05 Full Disk Access) and **check 6** (Railway memory) |
+| 5 — retirement | **prepared + verified locally 2026-11-16, ready to upload** (manifest below). Do NOT upload until Phase 4 check 5 passes — Phase 5 removes the `SEMI_UI=classic` rollback |
 
 ### Phase 4 — upload gate + post-deploy checks (Simpo)
 **Do not upload until** the backup agent has produced two scheduled `.db.gz` (RE-03 / §9 RE-05:
@@ -56,21 +56,35 @@ grant `/bin/bash` Full Disk Access first). Then upload the 2026-11-16 manifest a
 restore the pre-cutover `startup.sh` (`archive/_to_delete/…` not needed — the classic branch is the
 old line verbatim) and restore the pre-cutover `Dockerfile` (single `python:3.11-slim` stage) + delete `web/` **in GitHub** (`D`).
 
-### Phase 5 — retirement plan (start only after Phase 4 checks 1–6 pass)
-`dashboard.py` cannot simply be deleted: it also hosts every Flask endpoint (`/health`,
-`/api/db-stats`, the three exports, `/api/upload-iv`, `/api/run-crawl`) that Next proxies to, and
-it is the `SEMI_UI=classic` rollback. Recommended (prompt Phase 4 "decide whether endpoints stay in Flask"):
-**endpoints stay in Python permanently** — they depend on `_snapshot_db`, the pandas/openpyxl
-workbook, `job_heartbeat`'s run lock and `_freshness_report`, none of which should be re-implemented.
-1. Extract the routes + the helpers they use into a Dash-free `api_server.py` (Flask only);
-   `startup.sh` runs `gunicorn api_server:server` internally.
-2. Contract test: run old `dashboard:server` and new `api_server:server` on the fixture, diff every
-   route (JSON deep-equal; exports by integrity_check + row counts; `backup_local.sh` end-to-end).
-3. Copy `dashboard.py` to `archive/`; manifest `D dashboard.py`, `D assets/responsive.css` **in GitHub**;
-   drop `dash`, `dash-bootstrap-components` from `requirements.txt` (re-verify per-Python pins).
-4. The golden suite then freezes: `fixtures/golden.json` becomes the parity reference; `golden_dump.py`
-   is archived with `dashboard.py`. Remove the `SEMI_UI=classic` branch from `startup.sh`.
-5. CLAUDE.md §2/§3/§6/§7, PROJECT_INSTRUCTIONS.md (re-paste), §9 entry.
+### Phase 5 — retirement (done locally 2026-11-16; NOT in prod)
+What changed: `api_server.py` (Flask only) holds every route, extracted verbatim from `dashboard.py`
+with the helpers the routes use; `startup.sh` runs `gunicorn api_server:server` internally and has
+**no classic branch** (missing node/web build or `PORT=8051` → exit 1); `requirements.txt` drops
+dash / dash-bootstrap-components / plotly and pins flask 3.1.3 + werkzeug 3.1.9 directly;
+`dashboard.py` + `assets/responsive.css` archived to `archive/dashboard_phase5_20261116/` together
+with the exact pre-Phase-5 prod `startup.sh` / `requirements.txt` / `Dockerfile` (= the rollback).
+`golden.json` frozen; `golden_dump.py`, `test_responsive_smoke.py` and the Dash-vs-Next QA scripts archived.
+
+Verified: `Product/tests/test_api_contract.py` 21/21 on 4 DBs; Python 3.11 venv without dash/plotly
+→ every module imports, test_run_lock 18/18, PassMark 23/23; `npm test` 84/84; staged real
+`startup.sh` on a copy of the 2026-11-16 live bundle → /health identical via Next + gunicorn, all 6
+tabs draw every chart in a browser, auth 401s, exports correct, ⚡ crawl ran (35/35 + full supply
+chain) with "already in progress" on a 2nd click, `backup_local.sh` unedited → integrity ok, startup
+exits 1 with no web build / on PORT=8051, clean SIGTERM teardown.
+
+Intentional behaviour differences: GET `/api/run-crawl` → 405 (was Dash's catch-all 200 page —
+neither starts a crawl); the bundle README's local-run hint names `api_server.py`.
+
+**Upload gate:** Phase 4 check 5 (a scheduled `backup_local.sh` `.db.gz` from launchd). Then upload
+the 2026-11-16 Phase 5 manifest and check: build log `pip install` has no dash/plotly; boot line
+`=== UI: next (public :PORT) -> API: gunicorn api_server (internal http://127.0.0.1:8051) ===`;
+`/health`, tabs, ⚡, ⬇️ as in Phase 4; Railway memory drops (no Dash/Plotly in the 2 workers).
+**Rollback:** upload `archive/dashboard_phase5_20261116/Git_Deploy/{dashboard.py, assets/responsive.css,
+startup.sh, requirements.txt, Dockerfile}` back to the GitHub root (README there). `api_server.py` can stay.
+
+Follow-up (P3): freshness/consistency logic now exists twice — `api_server.py` (for `/api/db-stats`)
+and `web/lib/freshness.ts` / `consistency.ts` (navbar chips). Either make the chips read
+`/api/db-stats` through the proxy, or add a contract check that the two agree on the live DB.
 
 ### Resolved 2026-11-16: prod Python is 3.11
 The Railway build log shows `FROM python:3.11-slim` (the `Dockerfile` — §9 WEB-01e), so prod runs

@@ -45,8 +45,8 @@ if [ "$VOLUME_OK" = "1" ] && [ -n "$RAILWAY_VOLUME_MOUNT_PATH" ]; then
     fi
 fi
 
-# Passed to gunicorn via the environment; dashboard.py surfaces it on /health,
-# /api/db-stats, and as a red navbar banner.
+# Passed to gunicorn via the environment; api_server.py surfaces it on /health and
+# /api/db-stats, and the Next UI shows the red banner (web/lib/env.ts).
 export SEMI_VOLUME_OK="$VOLUME_OK"
 export SEMI_VOLUME_REASON="$VOLUME_REASON"
 
@@ -124,7 +124,7 @@ fi
 # railway.toml would turn THIS service into a cron job and take the dashboard
 # down. See scheduler.py's header for the full reasoning.
 #
-# Started here, once, BEFORE `exec gunicorn` — not inside the app — so
+# Started here, once, BEFORE gunicorn — not inside the app — so
 # `--workers 2` cannot run two copies of it. scheduler.py also takes an flock,
 # so a second instance started by hand exits instead of double-crawling.
 # It evaluates on a timer and runs whatever is past its interval, which means a
@@ -145,47 +145,40 @@ else
     echo "=== Watchdog SKIPPED — storage is ephemeral (see volume guard above) ==="
 fi
 
-# ── Start the web server(s) — WEB-01 Phase 4 cutover ──────────────────────────
-# Strangler layout: Next.js (web/, built by the Dockerfile) is PUBLIC on $PORT and
-# serves the UI; gunicorn moves to an INTERNAL port and keeps serving /health and
-# every /api/* route unchanged — Next proxies those paths to it (web/next.config.ts),
-# so the healthcheck, backup_local.sh and the relay see byte-identical responses.
+# ── Start the web servers — Next.js UI + Flask API (WEB-01) ───────────────────
+# Next.js (web/, built by the Dockerfile's `web` stage) is PUBLIC on $PORT and serves
+# the UI. api_server.py (plain Flask — no Dash since Phase 5) runs under gunicorn on an
+# INTERNAL port and serves /health and every /api/* route; Next proxies those paths to
+# it (web/next.config.ts), so the healthcheck, backup_local.sh and the relay see the same
+# responses as before (Product/tests/test_api_contract.py).
 #
-# ROLLBACK WITHOUT AN UPLOAD: set Railway Variable SEMI_UI=classic and redeploy —
-# gunicorn then binds $PORT exactly as before the cutover. The same fallback fires
-# automatically if node or the Next build is missing, so a broken web build can
-# never take the API down with it. Next is read-only on the DB, so there is no
-# data step in either direction.
+# There is no classic Dash fallback any more (retired in Phase 5). If node or the web
+# build is missing the container exits non-zero: on a new deploy that fails the
+# healthcheck and Railway keeps the previous deploy serving. Rollback = re-upload the
+# pre-Phase-5 files from archive/dashboard_phase5_20261116/ (see BACKLOG WEB-01).
 WEB_SERVER="web/.next/standalone/server.js"
-UI_MODE="${SEMI_UI:-next}"
-if [ "$UI_MODE" != "classic" ]; then
-    if ! command -v node >/dev/null 2>&1; then
-        echo "!!! node not found — falling back to the classic Dash UI on \$PORT !!!"
-        UI_MODE="classic"
-    elif [ ! -f "$WEB_SERVER" ]; then
-        echo "!!! $WEB_SERVER missing (web build did not run?) — falling back to the classic Dash UI !!!"
-        UI_MODE="classic"
-    fi
+if ! command -v node >/dev/null 2>&1; then
+    echo "!!! node not found — the image was not built from the Dockerfile's web stage. Exiting. !!!"
+    exit 1
 fi
-
-if [ "$UI_MODE" != "classic" ] && [ "$PORT" = "8051" ]; then
-    echo "!!! \$PORT is 8051, the internal API port — falling back to the classic Dash UI !!!"
-    UI_MODE="classic"
-fi
-
-if [ "$UI_MODE" = "classic" ]; then
-    echo "=== UI: classic (gunicorn on public \$PORT) ==="
-    exec gunicorn dashboard:server --bind "0.0.0.0:$PORT" --workers 2 --timeout 120
+if [ ! -f "$WEB_SERVER" ]; then
+    echo "!!! $WEB_SERVER missing — the web build did not run. Exiting. !!!"
+    exit 1
 fi
 
 # 8051 is ALSO baked into the web build: Next resolves its /health + /api/* rewrites at
 # build time (web/next.config.ts). Never make this port configurable here alone — a
-# mismatch makes /health return 500 and the deploy fail its healthcheck.
-CLASSIC_PORT=8051
-export CLASSIC_ORIGIN="http://127.0.0.1:$CLASSIC_PORT"
-echo "=== UI: next (public :$PORT) -> API: gunicorn (internal $CLASSIC_ORIGIN) ==="
+# mismatch makes /health return 500 and the deploy fail its healthcheck (§9 WEB-01d).
+# (The env name CLASSIC_ORIGIN predates Phase 5; web/lib/env.ts reads it by that name.)
+API_PORT=8051
+if [ "$PORT" = "$API_PORT" ]; then
+    echo "!!! \$PORT is $API_PORT, the internal API port — cannot start both servers. Exiting. !!!"
+    exit 1
+fi
+export CLASSIC_ORIGIN="http://127.0.0.1:$API_PORT"
+echo "=== UI: next (public :$PORT) -> API: gunicorn api_server (internal $CLASSIC_ORIGIN) ==="
 
-gunicorn dashboard:server --bind "127.0.0.1:$CLASSIC_PORT" --workers 2 --timeout 120 &
+gunicorn api_server:server --bind "127.0.0.1:$API_PORT" --workers 2 --timeout 120 &
 GUNICORN_PID=$!
 # HOSTNAME must be set explicitly: Next's standalone server binds to $HOSTNAME,
 # which a container otherwise sets to its own hostname.

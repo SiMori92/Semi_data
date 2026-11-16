@@ -4,11 +4,12 @@
 #
 # Two stages (WEB-01 Phase 4):
 #   1. `web`  — builds the Next.js UI in web/ on Node 22.
-#   2. final  — the Python app as before, plus the node binary and web's standalone
-#               server. startup.sh runs Next on $PORT and gunicorn on 127.0.0.1:8051.
-# If stage 1 fails, the whole build fails and Railway keeps the previous deploy.
-# If node or the web build is ever absent at runtime, startup.sh serves the classic
-# Dash UI on $PORT instead (rollback without an upload: Railway Variable SEMI_UI=classic).
+#   2. final  — crawlers + api_server.py (Flask, no Dash since Phase 5), plus the node
+#               binary and web's standalone server. startup.sh runs Next on $PORT and
+#               gunicorn api_server:server on 127.0.0.1:8051.
+# If stage 1 fails, the whole build fails and Railway keeps the previous deploy. If node
+# or the web build is ever absent at runtime, startup.sh exits 1 (healthcheck fails, the
+# previous deploy keeps serving). Rollback: archive/dashboard_phase5_20261116/README.md.
 
 # ── Stage 1: build the Next.js UI ───────────────────────────────────────────
 FROM node:22-bookworm-slim AS web

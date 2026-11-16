@@ -14,7 +14,7 @@
 
 An automated investment-analysis dashboard for a semiconductor industry analyst
 (Simpo, schiu.develop@gmail.com). Three crawlers pull market, options, and
-supply-chain data into a SQLite database; a 6-tab Dash app renders it; everything
+supply-chain data into a SQLite database; a 6-tab Next.js app renders it; everything
 is hosted on Railway.app.
 
 | Fact | Value |
@@ -24,7 +24,7 @@ is hosted on Railway.app.
 | **Deploy set (local)** | **`Product/Git_Deploy/`** — this folder alone is the GitHub repo root. Nothing outside it reaches production (§2.1, §5.0) |
 | Hosting | Railway.app — auto-deploys on every commit to GitHub `main`, repo root. **Simpo uploads manually; agents never run `git`** (§5.0, §7 rule 12) |
 | Datastore | SQLite on a Railway persistent volume at `/data/semiconductor_data.db` |
-| UI framework | **Next.js** (`web/`, public on `$PORT`) since the WEB-01 cutover; the Dash app + Flask endpoints run behind it on an internal port, and Next proxies `/health` + `/api/*` to them (§3). `SEMI_UI=classic` reverts to Dash-only |
+| UI framework | **Next.js** (`web/`, public on `$PORT`). Every endpoint is plain Flask in `api_server.py` on an internal port; Next proxies `/health` + `/api/*` to it (§3). The Dash UI was retired in WEB-01 Phase 5 (2026-11-16, archived) |
 | Railway project / service / env IDs | `cee3a9a0-…63` / `ef9c4dc0-…bb` / `d4d8a81d-…e9` |
 
 The product persona (analyst tone, strict sourcing, timestamps, zero-hallucination)
@@ -77,9 +77,9 @@ in it deploys, nothing outside it does. The deploy boundary is now the **folder*
   Product/                everything that is "the product"
     Git_Deploy/           ★ THE DEPLOY SET — a flat 1:1 mirror of the GitHub repo root:
                           all .py, startup.sh, Procfile, railway.toml, Dockerfile,
-                          requirements.txt, nixpacks.toml, ibkr_config.json, .gitignore,
-                          .env.example, assets/responsive.css (Dash static dir), and
-                          web/ (the Next.js UI — built in the image) — the only TWO subfolders
+                          requirements.txt, ibkr_config.json, .gitignore,
+                          .env.example, and web/ (the Next.js UI — built in the
+                          image) — the only subfolder
     next_rebuild/         WEB-01 parity harness for web/ (tests, fixtures, QA scripts)
                           — supplemental, does NOT deploy
     docs/                 reference material          — supplemental, does NOT deploy
@@ -99,11 +99,10 @@ in it deploys, nothing outside it does. The deploy boundary is now the **folder*
 
 Four rules make that layout safe:
 
-1. **Git_Deploy is flat — except `assets/` and `web/`.** Dash serves `assets/` automatically and needs
-   it to be a real subfolder beside `dashboard.py`; it holds static CSS only, nothing
-   boot imports. `web/` is the Next.js app: its own `package.json`, built by `nixpacks.toml`,
+1. **Git_Deploy is flat — except `web/`.** (`assets/` went with the Dash UI in Phase 5.)
+   `web/` is the Next.js app: its own `package.json`, built by the `Dockerfile`'s `web` stage,
    started by `startup.sh` — Python never imports from it and Node never imports outside it. Railway builds from the repo root; `startup.sh` invokes the
-   crawlers by **bare relative filename** and `gunicorn dashboard:server` resolves the
+   crawlers by **bare relative filename** and `gunicorn api_server:server` resolves the
    module from CWD. A subfolder inside `Git_Deploy` — or a `.py` moved out of it — breaks
    boot *after* the old container is gone. §7 rule 11.
 2. **"Supplemental" means it does not exist in production.** Nothing under `Product/docs`,
@@ -129,18 +128,17 @@ Paths in the table below are relative to **`Product/Git_Deploy/`** unless a fold
 | `ibkr_config.json` | IBKR connection + 33 contract specs | `ticker_contracts`, `enabled` | 101 |
 | `Product/local/ibkr_relay.py` | **LOCAL** script: TWS → cloud `/api/upload-iv` | relay loop | 235 |
 | `iv_crawler.py` | **Cloud** IV crawler — replaces the IBKR path | `fetch_iv30_yahoo()`, `fetch_dvol_history()`, `compute_metrics()`, `crawl_iv()` | ~460 |
-| `dashboard.py` | 6-tab Dash app + Flask endpoints; `server` for gunicorn. Responsive layout since 2026-10-30 (`_responsive_graph`, `_status_chip`) | tab fns + module helpers (§2.3) | ~5550 |
-| `assets/responsive.css` | Mobile breakpoints for the Dash shell (served by Dash from `assets/`) | semantic `dashboard-*` classes | 93 |
+| `api_server.py` | **Every HTTP endpoint** (§6.3) — plain Flask, no Dash; `server` for gunicorn (internal 127.0.0.1:8051). Extracted verbatim from the retired `dashboard.py` (WEB-01 Phase 5) with the helpers the routes use | `_freshness_report`, `_consistency_report`, `_stale_sources`, `_build_export_workbook`, `_snapshot_db` (§2.3) | ~1000 |
 | `job_heartbeat.py` | **The schedule + run heartbeats** — one definition read by both the scheduler and the UI | `JOB_SPECS`, `ensure_schema()`, `start_job()`, `finish_job()`, `job_report()`, `retry_backoff_hours()`; **run lock** `acquire_run_lock()` / `start_manual_run()` / `crawl_running()` — one flock (`.crawl_run.lock` beside the DB) taken by BOTH the scheduler and manual runs, so they never overlap (WEB-01c) | ~400 |
 | `scheduler.py` | In-container crawl watchdog (F-01). Cannot be a Railway cron service — §3 | `due_jobs()`, `run_job()`, `tick()`, `acquire_singleton_lock()` | ~230 |
 | `startup.sh` | Railway entrypoint: volume guard → curated reload → purges → seed-if-empty → watchdog → gunicorn | volume guard (§5.1), row-count check | 130 |
 | `Product/local/backup_local.sh` | **LOCAL** daily script: pulls `/api/export-db` (the real backup) + `/api/export-xlsx` (reading copy) to this Mac. **The only backup on the Hobby plan — §5.2** | `PRAGMA integrity_check` + `MIN_PRICE_ROWS` floor, gzip, prune-to-`$KEEP`, ephemeral/crawl warnings, size-regression guard (`SAFE_TO_PRUNE`), restore recipe in the footer | ~210 |
 | `Product/local/com.simpo.semibackup.plist` | launchd agent driving the above, daily 09:15. **Replaces the old crontab line — delete it** (cron skips while asleep, §9) | `StartCalendarInterval`, logs to `DB_Backup/backup.log` | 75 |
 | `Product/local/.backup_env.example` | Template for `Product/local/.backup_env` (gitignored): `RELAY_API_KEY` for `/api/export-db` | — | 12 |
-| `requirements.txt` | Python deps + gunicorn. **Pinned per Python version** (environment markers) to exactly what prod's 2026-10-29 build resolved — prod's Nixpacks Python version is unknown, and a flat pin of numpy/scipy/pandas fails on Python ≤3.11. Bump deliberately, then re-run the golden parity suite (WEB-01b) | — | ~30 |
+| `requirements.txt` | Python deps + gunicorn. **Pinned per Python version** (environment markers) to exactly what prod's 2026-10-29 build resolved — prod runs **Python 3.11** (`Dockerfile`, confirmed 2026-11-16), and a flat pin of numpy/scipy/pandas fails on Python ≤3.11. Bump deliberately, then re-run the golden parity suite (WEB-01b) | — | ~30 |
 | `Procfile` | `web: sh startup.sh` | — | 1 |
 | `railway.toml` | startCommand, healthcheckPath `/health`, timeout 300 | — | 8 |
-| `Dockerfile` | Alt deploy (Fly.io / manual Docker). Does **not** build `web/`, so `startup.sh` serves the classic Dash UI under it | — | 30 |
+| `Dockerfile` | **Prod's actual build** — Railway builds from it despite `railway.toml`'s `builder = "NIXPACKS"` (WEB-01e). Stage `web` (node:22) runs `export_web_config.py` + `npm ci` + `next build`; the `python:3.11-slim` runtime gets the `node` binary + `web/.next/standalone`. Railway's `startCommand` overrides `CMD` | `web` stage | ~60 |
 | `.env.example` | Template: `DB_PATH`, `PORT`, `RELAY_API_KEY` | — | 20 |
 | `Product/docs/PROJECT_INSTRUCTIONS.md` | **Canonical source of the Claude project's Instructions field** — §0 folder governance + the §8 analyst persona. Edit here, then re-paste into the field; the two drift silently otherwise (§12.2) | paste block below the marker line | ~95 |
 | `Product/docs/SETUP_GUIDE.md` | 12-section setup + deployment guide | — | 280 |
@@ -149,12 +147,11 @@ Paths in the table below are relative to **`Product/Git_Deploy/`** unless a fold
 | `Product/docs/QA_Review_Investor_Fitness_2026-08-02.md` | Investor-fitness QA review | — | — |
 | `Product/tests/test_qa05_passmark.py` | QA-05/QA-05c regression test: PassMark parser / per-class inversion gate / purge. Reads its subject out of `supply_chain_crawler.py` by text, so it needs only `bs4` — run it after ANY edit to the PassMark path | 23 assertions across parser, layout-refusal, `_passmark_inversion_check`, `_passmark_class_rhos` (incl. the real pooled Simpson's-paradox prod pattern), `purge_rank_as_price_rows` | ~150 |
 | `Product/tests/test_run_lock.py` | WEB-01c regression test: run lock (no overlap, scheduler waits) + `POST /api/run-crawl` (401/400/202/409). Fake 2-s crawlers, throwaway DB | 20 assertions | ~120 |
-| `Product/tests/test_responsive_smoke.py` | Server-side smoke test of the responsive shell: ID uniqueness, asset delivery, all six tab renders. `DB_PATH=<copy> python3 Product/tests/test_responsive_smoke.py` | 4 tests | ~160 |
-| `Product/tests/golden_dump.py` | WEB-01 golden parity harness: imports the real `dashboard.py` under a frozen clock (freezegun + a frozen `pd.Timestamp.today`) and dumps every helper's output to JSON for the TS parity suite. Needs `freezegun` (test-only). Works on a COPY of the DB — the badges issue DDL on read | `--db`, `--out` | ~420 |
+| `Product/tests/test_api_contract.py` | WEB-01 Phase 5 contract test: every route of `api_server:server` vs the archived `dashboard:server` on the same DB (JSON deep-equal; exports by integrity + per-table content hash). `dump` per server, then `compare`. Re-run after any `api_server.py` change | 21 checks | ~230 |
+| `archive/dashboard_phase5_20261116/` | The retired Dash UI (`dashboard.py`, `assets/`), the pre-Phase-5 `startup.sh`/`requirements.txt`/`Dockerfile` (= the rollback), `golden_dump.py`, `test_responsive_smoke.py`, Dash-vs-Next QA scripts. `next_rebuild/fixtures/golden.json` is now the **frozen** parity reference | README.md | — |
 | `web/` | **The public UI** (Next.js 16 / React 19 / Zod, App Router). Read-only on the DB (`better-sqlite3` `readonly`+`fileMustExist`). `lib/` = TS ports of the §2.3 helpers; `next.config.ts` proxies `/health` + `/api/*` to gunicorn (`CLASSIC_ORIGIN`) | `lib/schemas.ts`, `lib/db.ts`, `lib/plotly/figure.ts`, `lib/tabs/*`, `app/ui-api/run-crawl` | — |
 | `web/lib/generated/products-config.json` | **Generated** — never hand-edit. Rebuilt from `products_config.py` on every Railway build | — | — |
 | `export_web_config.py` | Build step: writes the JSON above, and **fails the build** if `web/lib/config.ts` ticker groups / colours drift from `config.py` | `PC_KEYS`, `KNOWN_UNGROUPED` | ~110 |
-| `nixpacks.toml` | Adds Node 22 + the `web/` build to the Python Nixpacks build. `railway.toml` unchanged | — | ~25 |
 | `Product/next_rebuild/` | WEB-01 **parity harness** (supplemental): `npm test` runs the golden suite against `Git_Deploy/web` via the `@web` alias; `npm run stage` builds the deploy copy locally in `.stage/` | `tests/`, `scripts/qa-*.cjs`, `fixtures/` | — |
 | `archive/old/` | Archived prior versions — **do not import from here** | — | — |
 
@@ -166,15 +163,15 @@ Paths in the table below are relative to **`Product/Git_Deploy/`** unless a fold
 | Change what market data is crawled | `crawler.py` |
 | Change supply-chain scraping logic | `supply_chain_crawler.py` |
 | Update monthly curated numbers (DRAM, capacity, retail, Steam, demand) | `products_config.py` (`CURATED_*` lists) → re-run `supply_chain_crawler.py`. **Removing a row only propagates for the two lists whose loader reconciles** — `CURATED_DRAM_SPOT` and `CURATED_RETAIL_PRICES` (§9, SC-14) |
-| Add/modify a dashboard tab | **`web/`** (`lib/tabs/*`, `components/`) — that is what users see. Until Phase 5 retires it, mirror the change in `dashboard.py` (§6.2) and re-run the golden suite, or parity breaks |
+| Add/modify a dashboard tab | **`web/`** (`lib/tabs/*`, `components/`) — §6.2. `npm test` + `npm run stage` in `Product/next_rebuild` |
 | Touch IV / options data | `iv_crawler.py` (**default, cloud-native**); `ibkr_options_crawler.py`, `Product/local/ibkr_relay.py`, `ibkr_config.json` (dormant IBKR path — see §11) |
-| Show P/E, market cap, or any valuation figure | `ticker_valuation_history` via `valuation_snapshot_data()` + `_valuation_snapshot_panel()` in `dashboard.py`. **Never** from `quarterly_financials` — §9 F-02 |
+| Show P/E, market cap, or any valuation figure | `ticker_valuation_history` via `valuationSnapshot()` in `web/lib/valuation.ts` + the Financials tab (`web/lib/tabs/financials.ts`). **Never** from `quarterly_financials` — §9 F-02 |
 | Run the PassMark regression tests | `python3 Product/tests/test_qa05_passmark.py` (works from any CWD) — mandatory after touching `_parse_passmark_table`, `crawl_passmark`, or `purge_rank_as_price_rows` (§9 QA-05) |
 | Add a deploy-time data-integrity cleanup | `crawler.py` `purge_contaminated_valuation_cols()` pattern → call it from the `--purge-only` branch; `startup.sh` already runs that on every boot |
 | Change how often a crawler runs, or add a scheduled job | `JOB_SPECS` in `job_heartbeat.py` — **the only place**. `scheduler.py` and the `/health` + navbar reporting both read it, so editing one dict moves both. A crawler not listed there is unscheduled AND unmonitored (§9 F-01) |
 | Check whether the crawlers are actually running | `/health` → `jobs` / `overdue_jobs` / `crawl_ok`, the navbar `crawl-status-badge`, or `python3 scheduler.py --status` |
-| Change how an IV source is labelled in the UI | `_IV_SOURCE_META` / `_iv_source_meta()` in `dashboard.py` — §2.3 |
-| Add an HTTP endpoint | `dashboard.py` Flask `@server.route` — see §6.3 |
+| Change how an IV source is labelled in the UI | `IV_SOURCE_META` / `ivSourceMeta()` in `web/lib/iv-source.ts` — §2.3 |
+| Add an HTTP endpoint | `api_server.py` Flask `@server.route` — see §6.3; add a contract check to `Product/tests/test_api_contract.py` |
 | Export the full dataset | `GET /api/export-bundle` (⬇️ Download Data navbar button) → zip of xlsx + db; or `/api/export-xlsx` / `/api/export-db` for one file — see §6.3 |
 | **Back up / restore the database** | `GET /api/export-db` + `Product/local/backup_local.sh` — see §5.2. Never treat the xlsx as a backup |
 | Change deploy/seed behavior | `startup.sh`, `railway.toml`, `Procfile` (**ask first**) |
@@ -182,12 +179,16 @@ Paths in the table below are relative to **`Product/Git_Deploy/`** unless a fold
 | Change the Claude project's Instructions field | `Product/docs/PROJECT_INSTRUCTIONS.md` → re-paste into the field. Never edit the field alone (§12.2) |
 | Check whether prod data is actually persistent | `/health` → `volume_ok`; see §5.1 |
 | Check whether a data source has gone quiet | `/api/db-stats` → `freshness` / `stale_sources` / `data_ok`, or the navbar badge; see §6.5 |
-| Add a table (and keep it monitored) | `_FRESHNESS_SPEC` in `dashboard.py` — §6.5 |
+| Add a table (and keep it monitored) | `_FRESHNESS_SPEC` in `api_server.py` (feeds `/api/db-stats`) **and** `FRESHNESS_SPEC` in `web/lib/freshness.ts` (feeds the navbar chip) — two copies since Phase 5; change both in one edit or the badge and the API disagree (§6.5) |
 
-### 2.3 Module-level helpers in `dashboard.py` (shared across tabs — do NOT redefine inline)
+### 2.3 Shared helpers (do NOT redefine inline)
 
-These were lifted out of `tab_overview()` and are now module-wide. `tab_sentiment()`,
-`tab_cycles()`, and `tab_supply_chain()` depend on them:
+Originally module-level in `dashboard.py` (retired in Phase 5). Each now lives as a **TypeScript
+port in `web/lib/`** under the camelCase form of the name below (`_mem_yoy` → `memYoy` in
+`mem.ts`, `_trace_style` → `traceStyle` in `plotly/figure.ts`, `_IV_SOURCE_META` →
+`IV_SOURCE_META` in `iv-source.ts`, …), parity-tested against the frozen `golden.json`. The
+freshness/consistency helpers and the two export helpers ALSO exist in Python in
+`api_server.py`, because `/api/db-stats` and the exports need them — keep both copies in step.
 
 ```text
 _CAT_ORDER        dict: category → list of ticker display names
@@ -298,11 +299,11 @@ Product/local/ibkr_relay.py (LOCAL) ┘         │
                     web/ — Next.js (public $PORT, read-only DB)
                                │  proxies /health, /api/*
                                ▼
-                 dashboard.py (gunicorn, 127.0.0.1:8051)
+                 api_server.py (gunicorn, 127.0.0.1:8051 — Flask, no UI)
                                │
                   ┌────────────┼─────────────┐
-                GET /       GET /health   POST /api/upload-iv
-              (Dash UI)     (uptime)      (IBKR relay receiver)
+                POST /api/run-crawl  GET /health   POST /api/upload-iv
+                (⚡, keyed)    (uptime)      (IBKR relay receiver)
                                           GET /api/db-stats (auth)
                                           GET /api/export-xlsx (public)
                                           GET /api/export-bundle (public) ◄─ ⬇️ button
@@ -337,8 +338,9 @@ Design decisions that constrain future work:
   so Next runs beside the crawlers and reads `/data/…` directly. `startup.sh` supervises both
   processes and exits non-zero if either dies (Railway restarts the container). Next never writes
   the DB; ⚡ Run Crawl goes Next `/ui-api/run-crawl` → Flask `POST /api/run-crawl` with the key
-  server-side. `SEMI_UI=classic`, a missing `node`, or a missing web build all fall back to
-  gunicorn on `$PORT` — the API never depends on the web build.
+  server-side. Since Phase 5 there is no Dash fallback: a missing `node` or web build makes
+  `startup.sh` exit 1, so a bad build fails its healthcheck and Railway keeps the previous deploy.
+  Endpoints stay in Python permanently (pandas/openpyxl workbook, `VACUUM INTO`, the run lock).
 - **`healthcheckTimeout=300`** in `railway.toml` gives the first-boot crawl time to finish
   before Railway declares the deploy failed. Do not lower it.
 
@@ -427,7 +429,7 @@ Four facts that constrain every agent working here:
    on every commit. Nothing an agent writes reaches production until that upload happens.
 4. **`Product/Git_Deploy/` is the GitHub repo root**, flat and 1:1 (§2.1). The upload set is
    its contents, plus `CLAUDE.md`/`BACKLOG.md` from the project root. Manifest paths are
-   therefore **GitHub-root** paths — `dashboard.py`, not `Product/Git_Deploy/dashboard.py` —
+   therefore **GitHub-root** paths — `api_server.py`, not `Product/Git_Deploy/api_server.py` —
    because that is where the file lands. A file edited anywhere else did not ship.
 
 **Therefore: an agent's deliverable is edited files PLUS an upload manifest.** End every
@@ -437,7 +439,7 @@ recover it from later, and a file the agent forgot to name is a file that never 
 ```
 UPLOAD TO GITHUB (main, repo root) — paths below are GitHub-root paths.
 Local source: Product/Git_Deploy/  (+ CLAUDE.md / BACKLOG.md from the project root)
-  M  dashboard.py            ← local  Product/Git_Deploy/dashboard.py
+  M  api_server.py           ← local  Product/Git_Deploy/api_server.py
   M  supply_chain_crawler.py ← local  Product/Git_Deploy/supply_chain_crawler.py
   M  CLAUDE.md               ← local  <project root>/CLAUDE.md
   A  requirements.txt        ← local  Product/Git_Deploy/requirements.txt
@@ -487,8 +489,8 @@ be written to ephemeral storage instead of the volume."*
 runtime whenever a volume is attached) plus a device-ID backstop (`stat -c %d`) for the
 case where the path looks right but nothing is actually mounted. On failure it **skips the
 seed crawl** — a seeded dashboard looks normal, which is precisely what hid the bug — and
-exports `SEMI_VOLUME_OK=0` / `SEMI_VOLUME_REASON` to gunicorn. `dashboard.py` surfaces
-that as a red navbar banner and in `/health` + `/api/db-stats`.
+exports `SEMI_VOLUME_OK=0` / `SEMI_VOLUME_REASON` to both servers. `api_server.py` reports
+it in `/health` + `/api/db-stats`; the Next UI shows it as a red navbar banner (`web/lib/env.ts`).
 
 The deploy stays **up** on failure (200 from `/health`) by design: the dashboard is
 read-mostly and still useful, and an outage is a worse trade than a loud banner.
@@ -501,7 +503,6 @@ read-mostly and still useful, and an outage is a worse trade than a loud banner.
 | `SEMI_ALLOW_EPHEMERAL_SEED` | you, optional | `1` ⇒ seed anyway (throwaway/preview envs only) |
 | `SEMI_DISABLE_SCHEDULER` | you, optional | `1` ⇒ do not start the watchdog. Use only if an external Railway Cron drives the crawlers and you want exactly one driver |
 | `SEMI_SCHEDULER_TICK_SEC` | you, optional | Watchdog re-evaluation interval; default 900 (15 min) |
-| `SEMI_UI` | you, optional | `classic` ⇒ skip the Next UI; gunicorn binds `$PORT` exactly as before the WEB-01 cutover. **The no-upload rollback.** Also automatic if `node` or the web build is missing |
 | `SEMI_CRAWL_RUN_LOCK` | you, optional | Path of the shared crawl run lock; default `.crawl_run.lock` beside the DB (on the volume) |
 
 **Not all data is equally at risk.** Prices/financials re-crawl from yfinance in ~3 min and
@@ -568,28 +569,16 @@ curl https://web-production-e3819.up.railway.app/api/db-stats \
   for idempotency.
 - Logging: `print(f"[{datetime.utcnow():%Y-%m-%d %H:%M:%S}] …")`.
 
-### 6.2 Dash callback pattern
-```python
-@app.callback(
-    Output("component-id", "property"),
-    Input("trigger-id", "property"),
-    State("state-id", "value"),
-    prevent_initial_call=True,   # for user-triggered callbacks
-)
-def cb(trigger_val, state_val):
-    if trigger_val is None:
-        raise PreventUpdate
-    ...
-    return result
-```
-- Every `Output` ID must be **globally unique** across `dashboard.py` — grep before adding.
-- Use `raise PreventUpdate` (not `dash.no_update`) for None/invalid input.
-- For sub-tabs, use `dbc.Tabs` with pre-rendered content + CSS show/hide. **Never** drive a
-  parent tab container from a nested callback (see §9 Supply Chain history).
-
-**Add a tab:** write `tab_yourname()` returning a `dbc.Tab` → add to `dbc.Tabs` children in
-`app.layout` → add `update_yourname_tab` callback keyed on `Input("tabs","active_tab")` →
-confirm all new component IDs are unique. Reuse §2.3 helpers; don't redefine them.
+### 6.2 Next.js tab pattern (WEB-01; the Dash callback pattern retired in Phase 5)
+- Tabs are routed by `?tab=<id>` (`web/lib/params.ts` `TABS`); `app/page.tsx` queries the DB
+  server-side and passes plain data to client components (`components/`). Charts are Plotly
+  figures built by `lib/plotly/figure.ts` and rendered by `PlotlyChart.tsx`.
+- Reuse the §2.3 ports in `web/lib/`; never re-derive a helper inline. URL state is parsed with
+  Zod (`parseView`), so a bad query string falls back to a default instead of crashing.
+- The UI is **read-only** on the DB (`lib/db.ts`). Anything that writes goes through an
+  `api_server.py` route (e.g. ⚡: `/ui-api/run-crawl` → `POST /api/run-crawl` with the key server-side).
+- **Add a tab:** a `TABS` entry + a `lib/tabs/<name>.ts` builder + a `case` in `page.tsx`; then
+  `npm test` and `npm run stage` (§6.4), and click through it in the staged build.
 
 ### 6.3 Flask endpoint pattern
 ```python
@@ -622,9 +611,8 @@ or the bundle and the direct download will silently drift apart.
 **`/api/export-xlsx`** streams the whole DB as a multi-sheet workbook (sheet 1 = README with
 export timestamp + per-table row counts). Tables are discovered from `sqlite_master`, so a new
 table is exported automatically — only add a `_EXPORT_SHEET_NAMES` entry if you want a prettier
-sheet label. It is served by a plain `dbc.Button(href=…, external_link=True)` anchor, **not** a
-Dash callback: routing a workbook through `dcc.Download` base64-inflates it into the callback
-response and risks the gunicorn `--timeout 120`. Keep it an anchor.
+sheet label. The ⬇️ button is a plain anchor to `/api/export-bundle` — keep it an anchor;
+never buffer a workbook through a client-side fetch/JSON response (the gunicorn `--timeout 120`).
 
 ### 6.4 Local dev loop
 ```bash
@@ -633,13 +621,14 @@ cd "/Users/simpochiu/Documents/Claude - Industry Data Pj/Product/Git_Deploy"
 pip3 install -r requirements.txt
 python3 crawler.py --quick          # prices + financials (~2 min)
 python3 supply_chain_crawler.py
-python3 dashboard.py                # → http://127.0.0.1:8050
+python3 api_server.py               # API → http://127.0.0.1:8051 (UI: npm run stage, below)
+python3 ../tests/test_api_contract.py --help   # after any api_server.py change (§2.1 row)
 python3 ../tests/test_qa05_passmark.py # regression tests — expect "23 passed, 0 failed"
-cd ../next_rebuild && npm test         # web/ parity suite vs the golden dump — expect all passed
+cd ../next_rebuild && npm test         # web/ parity suite vs the frozen golden.json — expect all passed
 npm run stage                          # build the deploy copy of web/ like Railway does
 ```
-Then click through **every tab**, exercise dropdowns/date-pickers/buttons, watch for red
-`Callback error` banners and for `DuplicateCallbackException` on startup. Validate DB row
+Then click through **every tab**, exercise dropdowns/date-pickers/buttons, watch for Next's red
+"Application error" overlay and for 500s from `/health` / `/api/*` in the staged build. Validate DB row
 counts (all expected tables > 0) before handing the manifest over for upload (§5.0).
 
 Tests live in `Product/tests/` — supplemental, so since 2026-08-23 they no longer ship to
@@ -694,15 +683,15 @@ threshold and the SLA here in agreement (e.g. Steam: 120 d ↔ 4 months).
 |---|------|-----|
 | 1 | Never `ALTER TABLE … ADD COLUMN` without `DEFAULT`/`NULL` | SQLite rejects NOT NULL on non-empty tables → crawler crash on Railway boot |
 | 2 | Never rename a DB column/table without a migration script | Callbacks read columns by name → silent NoneType errors across all tabs |
-| 3 | Never register two Dash callbacks with the same Output ID+property | `DuplicateCallbackException` at import → app won't start |
-| 4 | Never nest a callback Output inside another callback's Output | Dash 4.x circular-dependency / tab-render conflicts |
+| 3 | *(retired with the Dash UI, Phase 5 — kept so numbering stays stable)* Never register two Dash callbacks with the same Output ID+property | `DuplicateCallbackException` at import → app won't start |
+| 4 | *(retired, Phase 5)* Never nest a callback Output inside another callback's Output | Dash 4.x circular-dependency / tab-render conflicts |
 | 5 | Never use `python` on macOS — use `python3` | macOS `python` is v2; Railway uses `python` |
 | 6 | Never use `X \| Y` union syntax in signatures | Railway may run older Python; use `Optional[X]` |
 | 7 | Never put `.env`, `ibkr_relay_config.json`, `*.db`, `DB_Backup/`, `archive/`, or a `semiconductor_data_*/` snapshot in the upload set — and never write a secret's **value** into a tracked file, including this one | They are gitignored, but the GitHub web uploader **ignores `.gitignore`** (§5.0), so the only enforcement is the manifest. `RELAY_API_KEY` sat in plaintext in §5 of this file and shipped to GitHub with every upload — redaction does not undo history, so a leak means **rotate** |
 | 8 | Never set `PORT` as a Railway Variable | Railway injects it; a manual value crashes gunicorn |
 | 9 | Never use `[ ! -s "$DB_PATH" ]` to decide on seeding | A schema-only DB is non-empty (~68 KB) but has 0 rows; use a row-count check |
-| 10 | Never put `/` in a Dash component ID | Slashes break Dash's internal URL routing |
-| 11 | Never move a `.py`, `startup.sh`, `Procfile`, `railway.toml`, `nixpacks.toml`, or `requirements.txt` out of `Product/Git_Deploy/`, and never create a subfolder inside it other than **`assets/`** (Dash static files) and **`web/`** (the Next.js app: its own `package.json`, built in the image, started by `startup.sh` after gunicorn moves to an internal port). Nothing under `web/` is imported by Python, nothing outside `web/` is imported by Node, and `web/node_modules`/`.next` never exist locally inside Git_Deploy (build them via `npm run stage`) | Railway builds from the repo root; `startup.sh` invokes crawlers by bare filename and `gunicorn dashboard:server` resolves the module from CWD. A move that looks purely cosmetic fails at container boot — *after* the old container is gone. `Product/docs`, `Product/tests`, `Product/local` and `archive/` are safe precisely because nothing at boot references them and nothing in them ships (§2.1) |
+| 10 | *(retired, Phase 5)* Never put `/` in a Dash component ID | Slashes break Dash's internal URL routing |
+| 11 | Never move a `.py`, `startup.sh`, `Procfile`, `railway.toml`, `Dockerfile`, or `requirements.txt` out of `Product/Git_Deploy/`, and never create a subfolder inside it other than **`web/`** (the Next.js app: its own `package.json`, built in the image, started by `startup.sh` after gunicorn moves to an internal port). Nothing under `web/` is imported by Python, nothing outside `web/` is imported by Node, and `web/node_modules`/`.next` never exist locally inside Git_Deploy (build them via `npm run stage`) | Railway builds from the repo root; `startup.sh` invokes crawlers by bare filename and `gunicorn api_server:server` resolves the module from CWD. A move that looks purely cosmetic fails at container boot — *after* the old container is gone. `Product/docs`, `Product/tests`, `Product/local` and `archive/` are safe precisely because nothing at boot references them and nothing in them ships (§2.1) |
 | 12 | Never run `git` in this folder — no `init`, `add`, `commit`, or `push` | It is not a clone (§5.0). `git init` would fabricate a second history that the next agent reads as authoritative; the other verbs simply fail. Deployment is Simpo's manual upload — an agent's job ends at edited files + an upload manifest |
 | 13 | Never let a file removal ship as a local delete alone | Manual GitHub upload propagates adds and edits, never deletions or renames (§5.0). A deleted-here file keeps deploying forever — the file-level form of SC-14 (§9). Flag every `D`/`R` in the manifest so it is performed **in GitHub** |
 | 14 | Never upload a file from outside `Product/Git_Deploy/` — the only exceptions are `CLAUDE.md` and `BACKLOG.md` | The deploy boundary is the folder (§2.1). Uploading a supplemental file puts a second copy of it in production's source of truth, where the next agent reads it as live. The inverse is the sharper edge: a file you *edited* outside `Git_Deploy` did **not** ship, however finished it looks locally |
@@ -846,9 +835,12 @@ Tone: professional, objective, financial, analytical.
 | **WEB-01a** Every chart rendered at 450 px from 2026-10-30 | `_responsive_graph()` set `responsive=True`, so Plotly sized to the `dcc.Graph` container — whose default height is 450 px — and ignored `layout.height`: the 660-px price chart, `_apply_rangeselector_layout()`'s headroom and the per-ticker heatmap height were all squashed. Found only by a pixel-measuring side-by-side | `_responsive_graph()` sets `style.height` from the figure's own `layout.height`. **`responsive=True` makes the container, not the figure, own the height** — always give the container one |
 | **WEB-01 QA** Overview tab crashed (`TypeError`) whenever a selected ticker's latest perf value was NULL | Under pandas 3, `DataFrame.astype(str)` keeps NaN as a float, so `... .values + "%"` raised; the KPI path printed `nan%`. No fixture row had a NULL, so it never showed — found by a NULL-injected golden variant | Heatmap text `"—"` for NaN; KPI treats NaN as missing (no delta). **Test with injected NULLs: a fixture with no gaps cannot exercise missing-data rules**, and a dependency major (pandas 2→3) can turn a cosmetic `nan%` into a crash |
 | **WEB-01 QA** "Prod SQLite is in DELETE journal mode" — a wrong finding, briefly written into the rebuild prompt | Read from `PRAGMA journal_mode` on a `/api/export-db` backup; `VACUUM INTO` always writes DELETE mode. All crawlers set WAL | Corrected (§4). **A copy made by `VACUUM INTO` is not evidence of the source's journal mode** — check the writer code |
-| **WEB-01b** A "pin to what prod runs" `requirements.txt` would have failed the build | The newest numpy/scipy (and pandas 3) need Python ≥3.12/≥3.11; prod's Nixpacks Python version is recorded nowhere. Caught only by installing on a Python 3.10 machine | Pins per Python version via environment markers, each = what pip resolved at the 2026-10-29 build for that Python; verified installable on 3.9–3.13. **A dependency pin is only reproducible together with the interpreter version it was resolved for** |
+| **WEB-01b** A "pin to what prod runs" `requirements.txt` would have failed the build | The newest numpy/scipy (and pandas 3) need Python ≥3.12/≥3.11; prod's Python version was recorded nowhere (it is 3.11 — the `Dockerfile`, WEB-01e). Caught only by installing on a Python 3.10 machine | Pins per Python version via environment markers, each = what pip resolved at the 2026-10-29 build for that Python; verified installable on 3.9–3.13. **A dependency pin is only reproducible together with the interpreter version it was resolved for** |
 | **RE-04** `Git_Deploy` was ~350 lines behind production for 10 days, and `BACKLOG` still listed already-deployed work as "PENDING UPLOAD" | On 2026-10-30 a responsive redesign was committed and pushed from a separate git clone (`Semi_data/`), bypassing `Git_Deploy` entirely. Prod `/health` (scheduler on, heartbeats) proved the 2026-08-09 upload had landed, but nothing recorded it. Meanwhile the backup launchd agent (RE-03 step 1) was never reloaded: **no backup from 2026-08-09 to 2026-11-09**, 92 days of un-backfillable series with no second copy | `Git_Deploy` re-synced to `main@c9db2e4`; `assets/` permitted by rule 11; `Semi_data/` declared read-only reference; fresh verified backup pulled 2026-11-09. **Before trusting a folder as "what's in prod", compare it to `main` — and check the newest file in `DB_Backup/`, not the backup script** |
 | **WEB-01d** The cutover's first staged build would have failed its Railway healthcheck: `/health` → **500** through Next | Next.js resolves `rewrites()` at **build** time into `routes-manifest.json`, so `CLASSIC_ORIGIN` set by `startup.sh` at runtime was ignored and the proxy targeted the build-time default `:8050` while gunicorn listened on `:8051`. Found by running the staged standalone server, not by the 84-test parity suite, which never exercises the proxy | One internal port, pinned in three places that say so (`web/next.config.ts`, `web/lib/env.ts`, `startup.sh` `CLASSIC_PORT=8051`, no override); `$PORT=8051` falls back to classic. **A Next.js env var read in `next.config.ts` is a build input, not a runtime setting** — check `routes-manifest.json` for the value you expect |
+| **WEB-01e** The first cutover deploy served the classic Dash UI: `!!! node not found — falling back …` | `nixpacks.toml` added Node and the web build, but Railway builds this service from the root **`Dockerfile`** (`python:3.11-slim`, no Node) — `railway.toml`'s `builder = "NIXPACKS"` notwithstanding. The build log's first line says which: "load build definition from Dockerfile". The startup.sh fallback kept the site up, as designed | Web build moved into a `web` stage of the `Dockerfile`; `nixpacks.toml` deleted. Also settled the WEB-01b unknown: prod Python = **3.11**. **Read the build log's first lines before assuming which builder runs — a config file the builder never reads fails silently** |
+| **WEB-01f** The Dockerfile `web` stage failed in 8 s at `npm ci` | `better-sqlite3`'s install script is `node-gyp rebuild`. npm 11 (this Mac) skips unapproved install scripts, so every local build ran without it; npm 10 (the `node:22` image) runs it, and `node:22-bookworm-slim` has no compiler. The package ships N-API prebuilds (`prebuilds/linux-x64.node`), which are what actually loads | `npm ci --ignore-scripts` in the Dockerfile, reproducing the tested configuration. **A lockfile's `hasInstallScript` is not the whole story — check `npm install-scripts ls`, and match the npm major the build image uses** |
+| **WEB-01g** (Phase 5 QA, local) The staged Next proxy answered `/health` and every `/api/*` with **500** while gunicorn answered directly | Not a code bug: a leftover `next-server` from an earlier test still held `127.0.0.1:3100`; a specific-address bind wins over the new `*:3100` one, so requests went to the stale server, whose rewrite target was a gunicorn that no longer existed. Prod is unaffected — one container, fresh ports | Retested on a free port: all green. **Before reading an e2e failure as a regression, `lsof -nP -iTCP:<port> -sTCP:LISTEN` — two listeners on one port means you are testing the wrong process** |
 | **RE-05** The daily backup agent was "reloaded" in RE-03 on paper but was never installed; once installed (2026-11-16) launchd exited **126** on its first run | `~/Library/LaunchAgents` had no `com.simpo.semibackup.plist` at all. Installed, its first run failed with `Operation not permitted`: macOS privacy (TCC) blocks launchd's `/bin/bash` from reading `~/Documents`, where the script and `DB_Backup/` live. launchd itself could still write `backup.log`, so the log existing proved nothing | Agent installed; **Simpo must grant `/bin/bash` Full Disk Access** (System Settings → Privacy & Security → Full Disk Access → `+` → ⌘⇧G `/bin/bash`), then `launchctl start com.simpo.semibackup`. **A scheduled job on macOS is not verified until it has written its own output — check exit status (`launchctl list`, column 2) and a new `.db.gz`, not the log file** |
 
 ---
