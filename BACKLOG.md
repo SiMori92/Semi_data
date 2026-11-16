@@ -38,14 +38,14 @@ Decisions: D-1…D-8 (2026-11-09); **cutover signed off by Simpo 2026-11-16** (N
 |---|---|
 | 0–3 | done (84/84, 0 browser diffs — 2026-11-09) |
 | WEB-01a/b/c + Overview NULL fix | **in prod** — GitHub `main@0d1ae85` (2026-11-15); `POST /api/run-crawl` → 401 unkeyed, confirmed 2026-11-16 |
-| 4 — cutover | **prepared locally, ready to upload** (2026-11-16 manifest). NOT yet verified in prod — see checklist below |
+| 4 — cutover | 1st upload `main@2abb93e` (2026-11-16) served **classic** (`node not found`): Railway builds from the `Dockerfile`, not Nixpacks (§9 WEB-01e). Fix = Dockerfile `web` stage; 2nd upload failed at `npm ci` (§9 WEB-01f) → `--ignore-scripts`, **ready to upload** (3rd manifest 2026-11-16). NOT yet verified in prod |
 | 5 — retirement | **blocked on Phase 4 verified in prod** — see plan below |
 
 ### Phase 4 — upload gate + post-deploy checks (Simpo)
 **Do not upload until** the backup agent has produced two scheduled `.db.gz` (RE-03 / §9 RE-05:
 grant `/bin/bash` Full Disk Access first). Then upload the 2026-11-16 manifest and check:
-1. Railway build log: Nixpacks setup shows `nodejs_22`; `export_web_config: … matches config.py`;
-   `next build` succeeds. **Also note the Python version** (closes WEB-01b's known unknown).
+1. Railway build log: stage `FROM node:22-bookworm-slim AS web` runs; `export_web_config: … matches config.py`;
+   `npm ci` + `next build` succeed. (Python = 3.11 from the Dockerfile — WEB-01b's unknown is closed.)
 2. Deploy log: `=== UI: next (public :PORT) -> API: gunicorn (internal http://127.0.0.1:8051) ===`.
    If it says `falling back to the classic Dash UI`, the web build did not land — site still works.
 3. `/health` → same JSON as before (`volume_ok`, `crawl_ok`); `/api/db-stats` with key → 200.
@@ -54,7 +54,7 @@ grant `/bin/bash` Full Disk Access first). Then upload the 2026-11-16 manifest a
 6. Railway → Metrics: memory headroom (expected ≈ 175 MB Node + ~416 MB × 2 gunicorn).
 **Rollback (no upload needed):** Railway Variable `SEMI_UI=classic` → redeploy. Full rollback:
 restore the pre-cutover `startup.sh` (`archive/_to_delete/…` not needed — the classic branch is the
-old line verbatim) and delete `nixpacks.toml` + `web/` **in GitHub** (`D`).
+old line verbatim) and restore the pre-cutover `Dockerfile` (single `python:3.11-slim` stage) + delete `web/` **in GitHub** (`D`).
 
 ### Phase 5 — retirement plan (start only after Phase 4 checks 1–6 pass)
 `dashboard.py` cannot simply be deleted: it also hosts every Flask endpoint (`/health`,
@@ -72,13 +72,11 @@ workbook, `job_heartbeat`'s run lock and `_freshness_report`, none of which shou
    is archived with `dashboard.py`. Remove the `SEMI_UI=classic` branch from `startup.sh`.
 5. CLAUDE.md §2/§3/§6/§7, PROJECT_INSTRUCTIONS.md (re-paste), §9 entry.
 
-### Known unknown
-Prod's Python version (build log, step 1 above). **Narrowed 2026-11-16: it is ≥3.10** — the pinned
-`yfinance==1.7.0` needs `curl_cffi>=0.15` (Python ≥3.10), so `requirements.txt` does NOT install on 3.9
-(WEB-01b's "verified installable on 3.9–3.13" is wrong for 3.9), yet prod built `0d1ae85`. Fix the
-header comment, or add a 3.9 yfinance pin, next time requirements.txt is touched. If ≤3.10, prod runs pandas 2.3.3, under which
-`_compute_hv30` pads a NULL close instead of dropping it — the TS port follows pandas 3. No NULL
-close exists in any current 75-day window, so no number differs today.
+### Resolved 2026-11-16: prod Python is 3.11
+The Railway build log shows `FROM python:3.11-slim` (the `Dockerfile` — §9 WEB-01e), so prod runs
+pandas 3 and the TS `_compute_hv30` port (pandas-3 semantics) matches it. Remaining nit: WEB-01b's
+"verified installable on 3.9–3.13" is wrong for 3.9 (`yfinance==1.7.0` → `curl_cffi>=0.15` needs ≥3.10);
+fix the `requirements.txt` header comment next time it is touched. Not a prod issue.
 
 ---
 

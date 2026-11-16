@@ -19,11 +19,13 @@ WORKDIR /app
 COPY config.py products_config.py export_web_config.py ./
 COPY web/ web/
 # 1. regenerate the UI catalogue from products_config.py; exit 1 on ticker drift
-# 2. exact lockfile install (no package has an install script; none needs compiling)
+# 2. exact lockfile install. --ignore-scripts is REQUIRED: better-sqlite3's install
+#    script is `node-gyp rebuild` (needs g++/make, absent here). Its N-API binaries ship
+#    prebuilt in the package (prebuilds/linux-x64.node), and they are what loads — §9 WEB-01f.
 # 3. standalone build; static assets are not part of standalone output, copy them in
 RUN python3 export_web_config.py \
     && cd web \
-    && npm ci --no-audit --no-fund \
+    && npm ci --ignore-scripts --no-audit --no-fund \
     && npm run build \
     && cp -r .next/static .next/standalone/.next/static
 
