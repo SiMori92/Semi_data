@@ -1,0 +1,54 @@
+# Database (lives on Railway's persistent volume, not in git)
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# Environment secrets
+.env
+ibkr_relay_config.json
+local/.backup_env
+
+# Local backup copies — production data dumps, never in git.
+# (*.db above already covers the raw file, but not the gzipped or xlsx forms.)
+backups/
+*.db.gz
+# Export-bundle snapshot folders: semiconductor_data_YYYYMMDD_HHMM/ holds a .db
+# AND a .xlsx; *.db catches the first, nothing caught the second until this line.
+semiconductor_data_*/
+
+# Local-only folders that live BESIDE the deploy set and must never enter git
+# (CLAUDE.md §2.1). The GitHub repo root == the contents of Product/Git_Deploy/,
+# so these names should never appear here at all — they are listed as a backstop
+# against a whole-folder drag-and-drop, which the web uploader would accept.
+DB_Backup/
+_to_delete/
+archive/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+crawl.log
+ibkr_relay.log
+
+# Old files folder
+old/
+
+# Next.js UI (web/, WEB-01) — build output and deps are produced IN the Railway build
+# (Dockerfile `web` stage), never uploaded. web/lib/generated/ is regenerated there too, from
+# products_config.py (export_web_config.py) — but it is uploaded as well so a local
+# `next build` works without Python.
+web/node_modules/
+web/.next/
+web/next-env.d.ts
+web/*.tsbuildinfo

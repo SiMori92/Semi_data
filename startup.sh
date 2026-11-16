@@ -146,7 +146,7 @@ else
 fi
 
 # ── Start the web server(s) — WEB-01 Phase 4 cutover ──────────────────────────
-# Strangler layout: Next.js (web/, built by nixpacks.toml) is PUBLIC on $PORT and
+# Strangler layout: Next.js (web/, built by the Dockerfile) is PUBLIC on $PORT and
 # serves the UI; gunicorn moves to an INTERNAL port and keeps serving /health and
 # every /api/* route unchanged — Next proxies those paths to it (web/next.config.ts),
 # so the healthcheck, backup_local.sh and the relay see byte-identical responses.

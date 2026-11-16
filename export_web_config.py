@@ -2,7 +2,7 @@
 """
 export_web_config.py — BUILD-TIME bridge from the Python config to the Next.js UI (WEB-01, Phase 4).
 
-Run by nixpacks.toml's build phase, before `next build`:
+Run by the Dockerfile's `web` build stage, before `next build`:
 
     python export_web_config.py            # write web/lib/generated/products-config.json + check drift
     python export_web_config.py --check    # check only, write nothing (exit 1 on drift)

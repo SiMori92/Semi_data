@@ -1,21 +1,51 @@
+# Dockerfile — THIS IS PROD'S BUILD. Railway builds this service from this file
+# (build log: "load build definition from Dockerfile"), whatever railway.toml's
+# `builder` line says. Railway's startCommand (`sh startup.sh`) overrides CMD.
+#
+# Two stages (WEB-01 Phase 4):
+#   1. `web`  — builds the Next.js UI in web/ on Node 22.
+#   2. final  — the Python app as before, plus the node binary and web's standalone
+#               server. startup.sh runs Next on $PORT and gunicorn on 127.0.0.1:8051.
+# If stage 1 fails, the whole build fails and Railway keeps the previous deploy.
+# If node or the web build is ever absent at runtime, startup.sh serves the classic
+# Dash UI on $PORT instead (rollback without an upload: Railway Variable SEMI_UI=classic).
+
+# ── Stage 1: build the Next.js UI ───────────────────────────────────────────
+FROM node:22-bookworm-slim AS web
+# python3 only to run export_web_config.py (stdlib-only: imports config + products_config)
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY config.py products_config.py export_web_config.py ./
+COPY web/ web/
+# 1. regenerate the UI catalogue from products_config.py; exit 1 on ticker drift
+# 2. exact lockfile install (no package has an install script; none needs compiling)
+# 3. standalone build; static assets are not part of standalone output, copy them in
+RUN python3 export_web_config.py \
+    && cd web \
+    && npm ci --no-audit --no-fund \
+    && npm run build \
+    && cp -r .next/static .next/standalone/.next/static
+
+# ── Stage 2: runtime (Python app + node + built UI) ─────────────────────────
 FROM python:3.11-slim
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# gcc: Python wheels fallback. libstdc++6: needed by the node binary and the
+# better-sqlite3 native module copied in below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
+    gcc libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
 COPY requirements.txt .
-# ib_insync is only needed locally (IBKR relay runs on your machine, not cloud)
-# Install without it to keep the image lean; it's safe to keep if you prefer.
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Node runtime only (no npm needed at runtime)
+COPY --from=web /usr/local/bin/node /usr/local/bin/node
+
 COPY . .
+COPY --from=web /app/web/.next/standalone web/.next/standalone
 
 # Cloud providers inject PORT; default 8050 for local docker runs
 ENV PORT=8050
@@ -26,8 +56,8 @@ ENV DB_PATH=/data/semiconductor_data.db
 
 EXPOSE $PORT
 
-# Health check (uses the /health endpoint added to dashboard.py)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT}/health')"
 
-CMD ["sh", "-c", "gunicorn dashboard:server --bind 0.0.0.0:$PORT --workers 2 --timeout 120"]
+# Same entrypoint as Railway's startCommand, so a manual `docker run` behaves like prod
+CMD ["sh", "startup.sh"]
