@@ -12,7 +12,7 @@ import type { ScDramSpotRow } from "./schemas";
 
 export const MEM_DIE_GB: Record<string, number> = { DDR4: 1.0, DDR5: 2.0, LPDDR5X: 2.0, HBM3: 1.0, HBM3E: 1.0 };
 export const MEM_COLORS: Record<string, string> = {
-  DDR4: "#74C0FC", DDR5: "#51CF66", HBM3: "#CC5DE8", HBM3E: "#FF6B6B", LPDDR5X: "#FFD43B",
+  DDR4: "#1896FA", DDR5: "#2EA843", HBM3: "#CC5DE8", HBM3E: "#FF5858", LPDDR5X: "#B58D00",
 };
 export const MEM_UNIT_LABEL: Record<string, string> = {
   DDR4: "$/die", DDR5: "$/die", LPDDR5X: "$/die", HBM3: "$/GB", HBM3E: "$/GB",

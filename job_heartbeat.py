@@ -52,7 +52,7 @@ import subprocess
 import sys
 import threading
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from config import DB_PATH, now_hkt as _now_hkt
 
@@ -146,6 +146,24 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE crawl_runs ADD COLUMN job TEXT DEFAULT 'market'")
     if "note" not in cols:
         conn.execute("ALTER TABLE crawl_runs ADD COLUMN note TEXT")
+    # DH-01 — one row per SOURCE inside a job run. crawl_runs is per JOB, so a
+    # supply_chain run that scraped PassMark but got nothing from Steam used to
+    # log a single "completed". Additive table: no existing column changes.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS crawl_source_runs (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id       INTEGER,
+            job          TEXT,
+            source       TEXT NOT NULL,
+            started_at   TEXT NOT NULL,
+            finished_at  TEXT,
+            status       TEXT,
+            rows_written INTEGER DEFAULT 0,
+            error        TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_crawl_source_runs_source "
+                 "ON crawl_source_runs (source, id)")
     conn.commit()
 
 
@@ -191,6 +209,58 @@ def finish_job(
         conn.commit()
     except Exception:
         pass
+
+
+SOURCE_OK, SOURCE_NO_DATA, SOURCE_ERROR = "ok", "no_data", "error"
+
+
+def run_source(
+    conn: sqlite3.Connection,
+    run_id: Optional[int],
+    job: str,
+    source: str,
+    fn: Callable[[], object],
+) -> str:
+    """
+    Run ONE scraper inside a job and record its outcome in crawl_source_runs (DH-01).
+
+    Returns 'ok' (wrote ≥1 row), 'no_data' (ran but wrote nothing — a parse
+    gate rejected the page, or the source returned nothing) or 'error' (raised).
+    An exception is caught and recorded, never re-raised, so one broken scraper
+    no longer aborts every scraper after it. Only Exception is caught —
+    KeyboardInterrupt / SystemExit still stop the run.
+
+    rows_written = sqlite3 total_changes delta: rows inserted/replaced/deleted
+    by the scraper (INSERT OR REPLACE of an unchanged row still counts). On
+    'error' it includes changes that the rollback below may have undone.
+    Never raises on the audit write itself — same contract as finish_job().
+    """
+    started = _now().isoformat(timespec="seconds")
+    before = conn.total_changes
+    status, err = SOURCE_OK, None
+    try:
+        fn()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        status, err = SOURCE_ERROR, f"{type(exc).__name__}: {exc}"[:500]
+    rows = conn.total_changes - before
+    if status == SOURCE_OK and rows <= 0:
+        status = SOURCE_NO_DATA
+    try:
+        ensure_schema(conn)
+        conn.execute(
+            "INSERT INTO crawl_source_runs (run_id, job, source, started_at, finished_at, "
+            "status, rows_written, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (run_id, job, source, started, _now().isoformat(timespec="seconds"),
+             status, max(rows, 0), err),
+        )
+        conn.commit()
+    except Exception:
+        pass
+    return status
 
 
 # ── Heartbeat read path (shared by scheduler.py and dashboard.py) ─────────────

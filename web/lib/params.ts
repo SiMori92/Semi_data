@@ -7,13 +7,16 @@ import { z } from "zod";
 import { addDays, ymd, type Clock } from "./clock";
 import { INITIAL_SELECTED } from "./config";
 
+/** UI-01 Phase 2: plain labels (icons live in components/Shell.tsx); `tickers` = the tab
+ *  reads the ticker/date selection, so the filter panel is shown on it. */
 export const TABS = [
-  { id: "overview", label: "📊 Overview" },
-  { id: "financials", label: "💰 Financials" },
-  { id: "sentiment", label: "🌡️ Sentiment" },
-  { id: "cycles", label: "🔄 Cycles" },
-  { id: "compare", label: "⚖️ Period Compare" },
-  { id: "supplychain", label: "🏭 Supply Chain" },
+  { id: "overview", label: "Overview", tickers: true },
+  { id: "financials", label: "Financials", tickers: true },
+  { id: "sentiment", label: "Sentiment", tickers: true },
+  { id: "cycles", label: "Cycles", tickers: true },
+  { id: "compare", label: "Period Compare", tickers: true },
+  { id: "supplychain", label: "Supply Chain", tickers: false },
+  { id: "health", label: "Data Health", tickers: false },
 ] as const;
 export type TabId = (typeof TABS)[number]["id"];
 

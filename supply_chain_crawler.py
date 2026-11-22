@@ -29,7 +29,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from config import DB_PATH, REQUEST_DELAY_SECONDS, now_hkt as _now_hkt
-from job_heartbeat import start_job, finish_job, JOB_CURATED   # QA F-01
+from job_heartbeat import start_job, finish_job, run_source, JOB_CURATED, SOURCE_OK, SOURCE_ERROR   # QA F-01, DH-01
 from products_config import (
     ALL_PRODUCTS,
     CPU_ENTERPRISE_PRODUCTS,
@@ -1645,12 +1645,18 @@ def crawl_trendforce_spot(conn: sqlite3.Connection) -> None:
 # MAIN ORCHESTRATOR
 # ══════════════════════════════════════════════════════════════════════════════
 
-def crawl_supply_chain(quick: bool = False, curated_only: bool = False) -> None:
+def crawl_supply_chain(quick: bool = False, curated_only: bool = False) -> str:
     """
     Main entry point for supply-chain data collection.
     curated_only=True  loads only in-memory curated data — no network calls at all.
                        Idempotent (INSERT OR REPLACE); safe to run on every deploy.
     quick=True         skips PassMark + Newegg but still hits Steam / SEMI BTB.
+
+    Returns the job status written to crawl_runs ('completed' | 'failed').
+    DH-01: each live scraper runs through run_source(), which records its own
+    outcome in crawl_source_runs and CATCHES its exceptions — one broken scraper
+    no longer aborts the rest. The job is 'failed' only when NO scraper wrote a
+    row (finish_job's contract: a run that wrote nothing is not a success).
     """
     conn = get_conn()
     init_supply_chain_db(conn)
@@ -1676,39 +1682,50 @@ def crawl_supply_chain(quick: bool = False, curated_only: bool = False) -> None:
         finish_job(conn, _cur_id, "completed", note="curated reload only; no network calls")
         conn.close()
         log.info("✅  Curated data load complete (--curated-only; no network calls).")
-        return
+        return "completed"
 
-    run_id = start_job(conn, "supply_chain")
-    try:
-        log.info("─── Step 3: Live sources ────────────────────────────────────")
-        if not quick:
-            crawl_passmark(conn)
-            time.sleep(REQUEST_DELAY_SECONDS * 2)
-            crawl_newegg(conn)
-            time.sleep(REQUEST_DELAY_SECONDS)
-        else:
-            log.info("  [--quick] Skipping PassMark + Newegg scraping.")
+    log.info("─── Step 3: Live sources ────────────────────────────────────")
+    # (source key, scraper, polite delay AFTER it). Source keys are what the
+    # Data Health tab maps to charts (web/lib/tabs/health.ts SCRAPER_SOURCES).
+    steps = []
+    if not quick:
+        steps += [("passmark", crawl_passmark, REQUEST_DELAY_SECONDS * 2),
+                  ("newegg", crawl_newegg, REQUEST_DELAY_SECONDS)]
+    else:
+        log.info("  [--quick] Skipping PassMark + Newegg scraping.")
+    steps += [
+        ("steam_survey", crawl_steam_survey, REQUEST_DELAY_SECONDS),
+        ("trendforce_spot", crawl_trendforce_spot, REQUEST_DELAY_SECONDS),
+        ("tsmc_revenue", crawl_tsmc_revenue, REQUEST_DELAY_SECONDS),
+        ("umc_revenue", crawl_umc_revenue, REQUEST_DELAY_SECONDS),
+        ("nanya_revenue", crawl_nanya_revenue, REQUEST_DELAY_SECONDS),
+        ("tsmc_quarterly", crawl_tsmc_quarterly, 0),
+    ]
+    run_id = start_job(conn, "supply_chain", attempted=len(steps))
+    results = {}
+    for i, (name, fn, delay) in enumerate(steps):
+        results[name] = run_source(conn, run_id, "supply_chain", name, lambda fn=fn: fn(conn))
+        if results[name] == SOURCE_ERROR:
+            log.error(f"  [{name}] scraper raised — recorded in crawl_source_runs; continuing")
+        if delay and i < len(steps) - 1:
+            time.sleep(delay)
 
-        crawl_steam_survey(conn)
-        time.sleep(REQUEST_DELAY_SECONDS)
-        crawl_trendforce_spot(conn)
-        time.sleep(REQUEST_DELAY_SECONDS)
-        crawl_tsmc_revenue(conn)
-        time.sleep(REQUEST_DELAY_SECONDS)
-        crawl_umc_revenue(conn)
-        time.sleep(REQUEST_DELAY_SECONDS)
-        crawl_nanya_revenue(conn)
-        time.sleep(REQUEST_DELAY_SECONDS)
-        crawl_tsmc_quarterly(conn)
-    except Exception as exc:
-        finish_job(conn, run_id, "failed", note=f"{type(exc).__name__}: {exc}")
-        conn.close()
-        raise
-
-    finish_job(conn, run_id, "completed",
-               note="quick (no PassMark/Newegg)" if quick else "full")
+    ok = [k for k, v in results.items() if v == SOURCE_OK]
+    errs = [k for k, v in results.items() if v == SOURCE_ERROR]
+    empty = [k for k, v in results.items() if v not in (SOURCE_OK, SOURCE_ERROR)]
+    status = "completed" if ok else "failed"
+    note = f"{'quick' if quick else 'full'}: {len(ok)}/{len(results)} sources wrote data"
+    if errs:
+        note += f"; error: {', '.join(errs)}"
+    if empty:
+        note += f"; no data: {', '.join(empty)}"
+    finish_job(conn, run_id, status, ok=len(ok), note=note)
     conn.close()
-    log.info("✅  Supply chain crawl complete.")
+    if status == "failed":
+        log.error(f"❌  Supply chain crawl wrote nothing — {note}")
+        return status
+    log.info(f"✅  Supply chain crawl complete — {note}")
+    return status
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1740,4 +1757,6 @@ if __name__ == "__main__":
         crawl_trendforce_spot(_conn)
         _conn.close()
     else:
-        crawl_supply_chain(quick=args.quick, curated_only=args.curated_only)
+        _status = crawl_supply_chain(quick=args.quick, curated_only=args.curated_only)
+        if _status != "completed":
+            raise SystemExit(1)   # scheduler.py reads the exit code

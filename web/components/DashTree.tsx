@@ -7,6 +7,8 @@
 import type { CSSProperties, ReactNode } from "react";
 import { isNode, type Child, type DNode } from "@/lib/dash/tree";
 import type { Figure } from "@/lib/plotly/figure";
+import { Badge } from "./Badge";
+import { MetricCard, type MetricCardProps } from "./MetricCard";
 import { PlotlyChart } from "./PlotlyChart";
 import { DashTable, type TableProps } from "./DashTable";
 import { DashTabs } from "./DashTabs";
@@ -29,7 +31,10 @@ function Node({ n }: { n: DNode }): ReactNode {
   const kids = <DashTree node={p.children as Child} />;
   const cls = (p.className as string | undefined) ?? undefined;
 
+  if (n.namespace === "semi_ui" && n.type === "MetricCard") return <MetricCard {...(p as MetricCardProps)} />;
+
   if (n.namespace === "dash_html_components") {
+    if (n.type === "Span" && cls?.startsWith("badge badge-")) return <Badge variant={cls.includes("badge-published") ? "published" : "derived"}>{kids}</Badge>;
     const Tag = (TAGS[n.type] ?? "div") as "div";
     if (n.type === "Hr") return <hr style={style} className={cls} />;
     return <Tag id={id} style={style} className={cls}>{kids}</Tag>;
@@ -42,7 +47,7 @@ function Node({ n }: { n: DNode }): ReactNode {
       case "Col": return <div id={id} className={[p.width ? `col-${p.width}` : "col", cls].filter(Boolean).join(" ")} style={style}>{kids}</div>;
       case "Tabs": return <DashTabs node={n} />;
       case "Button": return <button id={id} className={`btn btn-${p.color ?? "primary"}`} style={style}>{kids}</button>;
-      case "Badge": return <span className={`badge bg-${p.color ?? "secondary"}`} style={style}>{kids}</span>;
+      case "Badge": return <Badge variant={p.color === "success" ? "ok" : p.color === "danger" ? "error" : p.color === "warning" ? "pending" : "neutral"}>{kids}</Badge>;
     }
   }
   if (n.namespace === "dash_core_components") {
@@ -62,7 +67,7 @@ function Node({ n }: { n: DNode }): ReactNode {
     }
   }
   if (n.namespace === "dash_table" && n.type === "DataTable") return <DashTable {...(p as unknown as TableProps)} />;
-  return <div style={{ color: "#f85149", fontSize: 11 }}>[unrendered component {n.namespace}.{n.type}]</div>;
+  return <div style={{ color: "var(--red)", fontSize: 11 }}>[unrendered component {n.namespace}.{n.type}]</div>;
 }
 
 /** Period Compare: Dash's controls card is replaced by an equivalent client form

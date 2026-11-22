@@ -4,21 +4,32 @@
  * tests/parity.config.test.ts checks them against the golden dump where the dump
  * carries them (ticker list, colours used in figures, job labels).
  */
-export const BG = "#0d1117";
-export const BG2 = "#161b22";
-export const BG3 = "#21262d";
-export const ACCENT = "#58a6ff";
-export const GREEN = "#3fb950";
-export const RED = "#f85149";
-export const YELLOW = "#d29922";
-export const TEXT = "#e6edf3";
-export const SUBTEXT = "#8b949e";
+// UI-01: theme colours are CSS-variable REFERENCES, resolved by the browser for
+// the current theme (light default / dark option). Values live in app/tokens.css,
+// mirrored in lib/theme.ts. Plotly figures may carry these too — PlotlyChart
+// resolves them before drawing (lib/theme.ts resolveCssVars).
+import { cssVar } from "./theme";
 
-/** config.CHART_COLORS */
+export const BG = cssVar("bg");
+export const BG2 = cssVar("surface");
+export const BG3 = cssVar("surface-2");
+export const ACCENT = cssVar("blue");
+export const ACCENT_SOFT = cssVar("accent-soft");
+export const GREEN = cssVar("green");
+export const RED = cssVar("red");
+export const YELLOW = cssVar("amber");
+export const ORANGE = cssVar("orange");
+export const TEXT = cssVar("text");
+export const SUBTEXT = cssVar("muted");
+export const LINE = cssVar("line");
+export const GRID = cssVar("grid");
+
+/** config.CHART_COLORS — fixed series colours, theme-independent: each is
+ *  >= 3:1 on both chart surfaces (tests/theme.test.ts). Must equal config.py. */
 export const CHART_COLORS = [
-  "#00D4FF", "#FF6B6B", "#51CF66", "#FFD43B", "#CC5DE8",
-  "#FF922B", "#74C0FC", "#F06595", "#A9E34B", "#63E6BE",
-  "#4DABF7", "#FFA94D", "#DA77F2", "#E599F7", "#96F2D7",
+  "#048BA6", "#E9403B", "#249240", "#9E7A04", "#B654D7",
+  "#D55905", "#1A80E6", "#E33D82", "#578E19", "#109076",
+  "#7276D6", "#A77448", "#D53AC8", "#81842C", "#688396",
 ] as const;
 
 /** config.SEMI_COMPANIES / SEMI_ETFS and the two hard-coded sidebar groups. */
@@ -65,11 +76,11 @@ export function tickerLabel(t: string): string {
 
 export const PLOTLY_BASE = {
   paper_bgcolor: BG2,
-  plot_bgcolor: BG3,
-  font: { color: TEXT, family: "Inter, Segoe UI, sans-serif" },
-  xaxis: { gridcolor: "#30363d", linecolor: "#30363d", zerolinecolor: "#30363d" },
-  yaxis: { gridcolor: "#30363d", linecolor: "#30363d", zerolinecolor: "#30363d" },
-  legend: { bgcolor: BG2, bordercolor: "#30363d" },
+  plot_bgcolor: BG2,
+  font: { color: TEXT, family: "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" },
+  xaxis: { gridcolor: GRID, linecolor: LINE, zerolinecolor: LINE },
+  yaxis: { gridcolor: GRID, linecolor: LINE, zerolinecolor: LINE },
+  legend: { bgcolor: BG2, bordercolor: LINE },
   colorway: [...CHART_COLORS],
   margin: { l: 50, r: 20, t: 40, b: 40 },
 } as const;

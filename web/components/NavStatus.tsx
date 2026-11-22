@@ -1,5 +1,7 @@
 "use client";
 /**
+ * Topbar status + actions (UI-01 Phase 2: handbook topbar; ⚡ Run crawl is the one
+ * primary action, Reload / Download are secondary).
  * Navbar status cluster. Initial values are server-rendered; afterwards it polls
  * /ui-api/status every 30 s — the Dash `status-interval` — so only the chips
  * refresh, never the charts. "🔄 Reload Charts" re-runs the Server Components.
@@ -8,8 +10,9 @@
  * the Python container under the shared run lock (BACKLOG WEB-01c).
  */
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { z } from "zod";
+import { Download, RotateCw, X, Zap } from "lucide-react";
 import { StatusChip } from "./StatusChip";
 import { StatusChip as ChipSchema } from "@/lib/schemas";
 
@@ -30,7 +33,7 @@ export const CrawlResult = z.object({
 });
 type CrawlResult = z.infer<typeof CrawlResult>;
 
-export function NavStatus({ initial }: { initial: StatusPayload }) {
+export function NavStatus({ initial, extra }: { initial: StatusPayload; extra?: ReactNode }) {
   const [s, setS] = useState(initial);
   const [toast, setToast] = useState<CrawlResult | null>(null);
   const [crawlBusy, setCrawlBusy] = useState(false);
@@ -51,22 +54,28 @@ export function NavStatus({ initial }: { initial: StatusPayload }) {
   }, []);
 
   return (
-    <div className="dashboard-navbar-right">
-      <div className="dashboard-status">
-        <span style={{ color: "#8b949e", fontSize: 12 }}>Last crawl: </span>
-        <span id="last-crawl-time" style={{ color: "#58a6ff", fontSize: 12 }}>{s.lastCrawl}</span>
-        <span id="reload-stamp" style={{ color: "#3fb950", fontSize: 11, marginLeft: 12, opacity: 0.8 }}>{stamp}</span>
+    <div className="topbar-inner">
+      <div className="topbar-status">
+        <span className="topbar-crawl">
+          <span className="muted">Last crawl </span>
+          <span id="last-crawl-time" className="mono">{s.lastCrawl}</span>
+          <span id="reload-stamp" className="reload-stamp" aria-live="polite">{stamp}</span>
+        </span>
         <StatusChip id="data-freshness-badge" chip={s.freshness} />
         <StatusChip id="crawl-status-badge" chip={s.crawl} />
         <StatusChip id="ibkr-status-badge" chip={s.iv} />
       </div>
-      <div className="dashboard-actions">
-        <button id="btn-refresh" className="btn btn-primary btn-sm" style={{ marginLeft: 16, fontSize: 12 }}
-          title="Re-read data from the database and redraw all charts" disabled={pending}
+      <div className="topbar-actions">
+        <button type="button" id="btn-refresh" className="btn btn-outline-secondary btn-sm"
+          title="Re-read data from the database and redraw all charts" aria-label="Reload charts" disabled={pending}
           onClick={() => start(() => { router.refresh(); setStamp(`✓ Reloaded ${hktHm()} HKT`); })}>
-          🔄 Reload Charts
+          <RotateCw size={15} aria-hidden="true" /><span className="btn-text">Reload</span>
         </button>
-        <button id="btn-run-crawl" className="btn btn-warning btn-sm" style={{ marginLeft: 8, fontSize: 12 }}
+        <a href="/api/export-bundle" id="btn-download-data" className="btn btn-outline-secondary btn-sm" aria-label="Download data"
+          title="Download the full dataset as a .zip: multi-sheet Excel workbook (for reading) + SQLite .db snapshot (restorable backup)">
+          <Download size={15} aria-hidden="true" /><span className="btn-text">Download data</span>
+        </a>
+        <button type="button" id="btn-run-crawl" className="btn btn-primary btn-sm"
           title="Fetch fresh market data from Yahoo Finance (takes ~2 min)" disabled={crawlBusy}
           onClick={async () => {
             setCrawlBusy(true);
@@ -80,21 +89,15 @@ export function NavStatus({ initial }: { initial: StatusPayload }) {
               setToast({ message: `Could not start the crawl: ${(e as Error).message}`, icon: "danger" });
             } finally { setCrawlBusy(false); }
           }}>
-          ⚡ Run Crawl
+          <Zap size={15} aria-hidden="true" />{crawlBusy ? "Starting…" : "Run crawl"}
         </button>
-        <a href="/api/export-bundle" role="button" id="btn-download-data" className="btn btn-success btn-sm"
-          style={{ marginLeft: 8, fontSize: 12 }}
-          title="Download the full dataset as a .zip: multi-sheet Excel workbook (for reading) + SQLite .db snapshot (restorable backup)">
-          ⬇️ Download Data
-        </a>
+        {extra}
       </div>
       {toast ? (
-        <div id="crawl-toast" role="alert" className="toast show dashboard-toast fade"
-          style={{ position: "fixed", top: 66, right: 16, width: 320, zIndex: 9999 }}>
-          <div className="toast-header">
-            <svg className={`rounded me-2 text-${toast.icon}`} width="20" height="20" focusable="false" role="img"><rect fill="currentColor" width="100%" height="100%" /></svg>
-            <strong className="me-auto">Crawl Status</strong>
-            <button type="button" className="btn-close" aria-label="Close" onClick={() => setToast(null)} />
+        <div id="crawl-toast" role={toast.icon === "danger" ? "alert" : "status"} className={`toast toast-${toast.icon}`}>
+          <div className="toast-head">
+            <strong>Crawl status</strong>
+            <button type="button" className="icon-button" aria-label="Close" onClick={() => setToast(null)}><X size={16} aria-hidden="true" /></button>
           </div>
           <div className="toast-body">{toast.message}</div>
         </div>

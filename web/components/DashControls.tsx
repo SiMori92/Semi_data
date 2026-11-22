@@ -17,7 +17,7 @@ function useParamPush() {
 export function CycleSelect({ options, value, style }: { options: string[]; value: string; style?: CSSProperties }) {
   const push = useParamPush();
   return (
-    <select id="cycles-ticker-select" className="cycle-ticker-select form-select form-select-sm" value={value} style={style}
+    <select aria-label="Cycle chart ticker" id="cycles-ticker-select" className="cycle-ticker-select form-select form-select-sm" value={value} style={style}
       onChange={(e) => push({ cyc: e.target.value })}>
       {options.map((o) => <option key={o} value={o}>{o}</option>)}
     </select>
@@ -33,8 +33,8 @@ export function ComparePicker({ a, b }: { a: { start_date: string; end_date: str
   );
   return (
     <div className="row semi-compare">
-      <div className="col-5"><label style={{ color: "#8b949e", fontSize: 12 }}>Period A</label><div className="semi-daterange">{inp("a0", "Period A start")}{inp("a1", "Period A end")}</div></div>
-      <div className="col-5"><label style={{ color: "#8b949e", fontSize: 12 }}>Period B</label><div className="semi-daterange">{inp("b0", "Period B start")}{inp("b1", "Period B end")}</div></div>
+      <div className="col-5"><label style={{ color: "var(--muted)", fontSize: 12 }}>Period A</label><div className="semi-daterange">{inp("a0", "Period A start")}{inp("a1", "Period A end")}</div></div>
+      <div className="col-5"><label style={{ color: "var(--muted)", fontSize: 12 }}>Period B</label><div className="semi-daterange">{inp("b0", "Period B start")}{inp("b1", "Period B end")}</div></div>
       <div className="col-2"><div style={{ height: 20 }} /><button id="btn-compare" className="btn btn-primary" style={{ marginTop: 4 }} onClick={() => push(v)}>Compare →</button></div>
     </div>
   );

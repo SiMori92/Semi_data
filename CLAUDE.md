@@ -1,11 +1,22 @@
 # CLAUDE.md — Semiconductor Industry Tracker
 
+## Folder location & backup (updated 2026-11-21)
+
+- **Project root:** `/Users/simpochiu/Projects/Invest-Industry Data Pj`. Paths under `~/Documents/...` or old names like `~/Projects/Claude - ...` in older notes, logs or handovers are stale.
+- **In Cowork:** connect this project folder itself, not `~/Projects` as a whole, so it mounts at `$HOME/mnt/Invest-Industry Data Pj`.
+- **Code backup:** this folder is not synced by Google Drive. rclone backs it up nightly to Google Drive at `Backup/Projects/Invest-Industry Data Pj`, skipping `node_modules`, `.venv*`, `.next`, `__pycache__`, caches, secrets and symlinks.
+- **Documents copy:** every hour, documents are copied automatically from here to `/Users/simpochiu/Documents/Invest-Industry Data Pj/`, which syncs to Google Drive. That covers .md, .txt, .csv, PDF, Office files, .html, images, audio and video, in the same folder structure. Code, environments, `CLAUDE.md`/`AGENTS.md`, `_Working/` and secrets are not copied. Always create and edit files **here**. The Documents copy is one-way, so edits made there don't come back.
+- **Never** put code, environments, build output or symlinks in `~/Documents`.
+- **Paths in code:** resolve paths relative to the project root (e.g. `Path(__file__).resolve().parent`) instead of hard-coding absolute paths.
+- **launchd backup job:** `~/Projects` isn't TCC-protected, so Full Disk Access is no longer needed. The installed `~/Library/LaunchAgents/com.simpo.semibackup.plist` must be re-copied from `Product/local/` and reloaded (it still points at the old `Claude - Industry Data Pj` path).
+
+
 > **Read this file FIRST, in full, at the start of every session in this project.**
 > It is the single source of truth for how this codebase is structured, how agents
 > hand work to one another, and which mistakes have already cost us production incidents.
 >
-> Last structural rewrite: 2026-08-23 (folder reorg — §2.1 four-folder layout,
-> §5.0 `Product/Git_Deploy` as the GitHub-root mirror, §7 rules 14–15)
+> Last structural rewrite: 2026-11-22 (GIT-01 — §5.0 git work tree + push only on explicit
+> ask/approval, §7 rules 7/12–14). Before that: 2026-08-23 folder reorg (§2.1, rules 14–15)
 > Open / in-progress work lives in **`BACKLOG.md`** — check it before claiming a task.
 
 ---
@@ -20,9 +31,9 @@ is hosted on Railway.app.
 | Fact | Value |
 |------|-------|
 | Live URL | https://web-production-e3819.up.railway.app/ |
-| Local folder | `/Users/simpochiu/Documents/Claude - Industry Data Pj` — four-folder layout, §2.1 |
+| Local folder | `/Users/simpochiu/Projects/Invest-Industry Data Pj` — four-folder layout, §2.1 |
 | **Deploy set (local)** | **`Product/Git_Deploy/`** — this folder alone is the GitHub repo root. Nothing outside it reaches production (§2.1, §5.0) |
-| Hosting | Railway.app — auto-deploys on every commit to GitHub `main`, repo root. **Simpo uploads manually; agents never run `git`** (§5.0, §7 rule 12) |
+| Hosting | Railway.app — auto-deploys on every push to GitHub `main`, repo root. `Product/Git_Deploy/` is the git work tree; **agents commit/push only on Simpo's explicit ask or approval** (§5.0, §7 rule 12) |
 | Datastore | SQLite on a Railway persistent volume at `/data/semiconductor_data.db` |
 | UI framework | **Next.js** (`web/`, public on `$PORT`). Every endpoint is plain Flask in `api_server.py` on an internal port; Next proxies `/health` + `/api/*` to it (§3). The Dash UI was retired in WEB-01 Phase 5 (2026-11-16, archived) |
 | Railway project / service / env IDs | `cee3a9a0-…63` / `ef9c4dc0-…bb` / `d4d8a81d-…e9` |
@@ -39,7 +50,7 @@ code or this doc.
 2. Read `BACKLOG.md` for open/in-progress work and any half-finished edits.
 3. List the project files to get a current snapshot — the deploy set first:
    ```bash
-   cd "/Users/simpochiu/Documents/Claude - Industry Data Pj"
+   cd "/Users/simpochiu/Projects/Invest-Industry Data Pj"
    ls -la . Product Product/Git_Deploy
    ```
 4. Read every file you intend to modify (Read tool) **before** editing. Never edit blind.
@@ -49,11 +60,10 @@ code or this doc.
    Railway-only and surface only after the change is uploaded and deployed.
 7. **Ask Simpo before:** changing DB schema, editing `startup.sh`/`railway.toml`,
    adding a `requirements.txt` dependency, or removing/renaming a Flask endpoint.
-8. Read **§5.0** before you touch a deployable file. You do **not** deploy: no `git`
-   (§7 rule 12), and your task is not finished until you have produced an **upload
-   manifest** (§5.0) naming every file added, modified, or deleted. There is no
-   `git status` here — a file you don't name is a file that never reaches production.
-   Manifest paths are **GitHub-root** paths; their local source is `Product/Git_Deploy/` (§2.1).
+8. Read **§5.0** before you touch a deployable file. `git status` / `git diff` in
+   `Product/Git_Deploy/` show what you changed. You **commit and push only when Simpo explicitly
+   asks or approves** (§7 rule 12) — a push to `main` is a production deploy. Otherwise finish
+   with the file list ("ready to commit"), deletions included.
 
 ---
 
@@ -67,15 +77,17 @@ to the file(s) and the symbols noted.
 **Folder layout (reorganised 2026-08-23).** The project is four top-level folders and
 **exactly one of them ships**. `Product/Git_Deploy/` *is* the GitHub repo root: every file
 in it deploys, nothing outside it does. The deploy boundary is now the **folder**, not a
-`.gitignore` rule — because the manual upload path ignores `.gitignore` anyway (§5.0).
+`.gitignore` rule — the folder is also the git work tree (§5.0).
 
 ```
 <project root>/
   CLAUDE.md, BACKLOG.md   the agent contract. Kept at the project ROOT because agent
-                          tooling loads them from there. They are the ONLY two files
-                          outside Git_Deploy that still upload to the GitHub root
+                          tooling loads them from there. The ONLY two files outside
+                          Git_Deploy that go to the GitHub root — staged by
+                          Product/local/git_stage_root_docs.sh (§5.0)
   Product/                everything that is "the product"
-    Git_Deploy/           ★ THE DEPLOY SET — a flat 1:1 mirror of the GitHub repo root:
+    Git_Deploy/           ★ THE DEPLOY SET + git work tree of SiMori92/Semi_data main (since
+                          2026-11-22, GIT-01) — a flat 1:1 mirror of the GitHub repo root:
                           all .py, startup.sh, Procfile, railway.toml, Dockerfile,
                           requirements.txt, ibkr_config.json, .gitignore,
                           .env.example, and web/ (the Next.js UI — built in the
@@ -87,11 +99,10 @@ in it deploys, nothing outside it does. The deploy boundary is now the **folder*
     local/                LOCAL-ONLY scripts (backup agent, IBKR relay)
                           — supplemental; must never be invoked by startup.sh
   DB_Backup/              database exports pulled from the live site (§5.2). Production
-                          data — NEVER upload, never open in an upload manifest (§7 r7)
-  Semi_data/              a git clone of the GitHub repo (SiMori92/Semi_data, PUBLIC),
-                          created 2026-10-30 outside this contract. READ-ONLY reference for
-                          "what is actually on main" — never edit it, never upload from it
-                          (§9 RE-04)
+                          data — NEVER commit, never name it in a git add (§7 r7)
+  Semi_data/              SUPERSEDED stale clone (2026-10-30) of SiMori92/Semi_data (PUBLIC).
+                          Use `git -C Product/Git_Deploy fetch` / `log origin/main` for "what is
+                          on main" now. Never edit, commit or push from it (§9 RE-04, GIT-01)
   archive/                obsoleted product items and documents. Never imported, never
                           uploaded. `archive/_to_delete/` stages files for deletion,
                           because agents cannot delete files on this Mac
@@ -110,9 +121,9 @@ Four rules make that layout safe:
    If the running app needs a file, that file belongs in `Git_Deploy`. A build-critical
    file filed as supplemental is the 2026-08-23 `requirements.txt` incident (§9).
 3. **Supplemental also means this Mac is its only copy.** `docs/`, `tests/` and `local/`
-   no longer reach GitHub, and there is no git here (§5.0). The copies still sitting in the
+   no longer reach GitHub, and they are outside the git work tree (§5.0). The copies still sitting in the
    GitHub repo from before the reorg are **frozen** — never read them as current, and never
-   "resync" them by uploading a folder.
+   "resync" them by committing a folder.
 4. **Every DB export goes to `DB_Backup/`**, enforced by `BACKUP_DIR` in the backup script
    and the launchd plist rather than by remembering (§5.2).
 
@@ -129,11 +140,12 @@ Paths in the table below are relative to **`Product/Git_Deploy/`** unless a fold
 | `Product/local/ibkr_relay.py` | **LOCAL** script: TWS → cloud `/api/upload-iv` | relay loop | 235 |
 | `iv_crawler.py` | **Cloud** IV crawler — replaces the IBKR path | `fetch_iv30_yahoo()`, `fetch_dvol_history()`, `compute_metrics()`, `crawl_iv()` | ~460 |
 | `api_server.py` | **Every HTTP endpoint** (§6.3) — plain Flask, no Dash; `server` for gunicorn (internal 127.0.0.1:8051). Extracted verbatim from the retired `dashboard.py` (WEB-01 Phase 5) with the helpers the routes use | `_freshness_report`, `_consistency_report`, `_stale_sources`, `_build_export_workbook`, `_snapshot_db` (§2.3) | ~1000 |
-| `job_heartbeat.py` | **The schedule + run heartbeats** — one definition read by both the scheduler and the UI | `JOB_SPECS`, `ensure_schema()`, `start_job()`, `finish_job()`, `job_report()`, `retry_backoff_hours()`; **run lock** `acquire_run_lock()` / `start_manual_run()` / `crawl_running()` — one flock (`.crawl_run.lock` beside the DB) taken by BOTH the scheduler and manual runs, so they never overlap (WEB-01c) | ~400 |
+| `job_heartbeat.py` | **The schedule + run heartbeats** — one definition read by both the scheduler and the UI | `JOB_SPECS`, `ensure_schema()`, `start_job()`, `finish_job()`, `run_source()` (per-scraper outcome → `crawl_source_runs`, catches the scraper's exception — DH-01), `job_report()`, `retry_backoff_hours()`; **run lock** `acquire_run_lock()` / `start_manual_run()` / `crawl_running()` — one flock (`.crawl_run.lock` beside the DB) taken by BOTH the scheduler and manual runs, so they never overlap (WEB-01c) | ~400 |
 | `scheduler.py` | In-container crawl watchdog (F-01). Cannot be a Railway cron service — §3 | `due_jobs()`, `run_job()`, `tick()`, `acquire_singleton_lock()` | ~230 |
 | `startup.sh` | Railway entrypoint: volume guard → curated reload → purges → seed-if-empty → watchdog → gunicorn | volume guard (§5.1), row-count check | 130 |
 | `Product/local/backup_local.sh` | **LOCAL** daily script: pulls `/api/export-db` (the real backup) + `/api/export-xlsx` (reading copy) to this Mac. **The only backup on the Hobby plan — §5.2** | `PRAGMA integrity_check` + `MIN_PRICE_ROWS` floor, gzip, prune-to-`$KEEP`, ephemeral/crawl warnings, size-regression guard (`SAFE_TO_PRUNE`), restore recipe in the footer | ~210 |
 | `Product/local/com.simpo.semibackup.plist` | launchd agent driving the above, daily 09:15. **Replaces the old crontab line — delete it** (cron skips while asleep, §9) | `StartCalendarInterval`, logs to `DB_Backup/backup.log` | 75 |
+| `Product/local/git_stage_root_docs.sh` | **LOCAL** helper: stages project-root `CLAUDE.md`/`BACKLOG.md` at the repo root of the `Product/Git_Deploy` work tree (sparse-checkout keeps them out of the folder). `--check` = dry run. Only inside an approved commit (§5.0) | — | ~45 |
 | `Product/local/.backup_env.example` | Template for `Product/local/.backup_env` (gitignored): `RELAY_API_KEY` for `/api/export-db` | — | 12 |
 | `requirements.txt` | Python deps + gunicorn. **Pinned per Python version** (environment markers) to exactly what prod's 2026-10-29 build resolved — prod runs **Python 3.11** (`Dockerfile`, confirmed 2026-11-16), and a flat pin of numpy/scipy/pandas fails on Python ≤3.11. Bump deliberately, then re-run the golden parity suite (WEB-01b) | — | ~30 |
 | `Procfile` | `web: sh startup.sh` | — | 1 |
@@ -147,9 +159,12 @@ Paths in the table below are relative to **`Product/Git_Deploy/`** unless a fold
 | `Product/docs/QA_Review_Investor_Fitness_2026-08-02.md` | Investor-fitness QA review | — | — |
 | `Product/tests/test_qa05_passmark.py` | QA-05/QA-05c regression test: PassMark parser / per-class inversion gate / purge. Reads its subject out of `supply_chain_crawler.py` by text, so it needs only `bs4` — run it after ANY edit to the PassMark path | 23 assertions across parser, layout-refusal, `_passmark_inversion_check`, `_passmark_class_rhos` (incl. the real pooled Simpson's-paradox prod pattern), `purge_rank_as_price_rows` | ~150 |
 | `Product/tests/test_run_lock.py` | WEB-01c regression test: run lock (no overlap, scheduler waits) + `POST /api/run-crawl` (401/400/202/409). Fake 2-s crawlers, throwaway DB | 20 assertions | ~120 |
+| `Product/tests/test_source_runs.py` | DH-01 regression test: fake scrapers (raise / write / write nothing) → `crawl_source_runs` rows, later scrapers still run after an error, job `failed` only when no source wrote, CLI exit 1. Needs `requests`+`bs4` and **Python ≥3.10** (`supply_chain_crawler.py` has a 3.10 annotation) | 13 assertions | ~140 |
 | `Product/tests/test_api_contract.py` | WEB-01 Phase 5 contract test: every route of `api_server:server` vs the archived `dashboard:server` on the same DB (JSON deep-equal; exports by integrity + per-table content hash). `dump` per server, then `compare`. Re-run after any `api_server.py` change | 21 checks | ~230 |
 | `archive/dashboard_phase5_20261116/` | The retired Dash UI (`dashboard.py`, `assets/`), the pre-Phase-5 `startup.sh`/`requirements.txt`/`Dockerfile` (= the rollback), `golden_dump.py`, `test_responsive_smoke.py`, Dash-vs-Next QA scripts. `next_rebuild/fixtures/golden.json` is now the **frozen** parity reference | README.md | — |
 | `web/` | **The public UI** (Next.js 16 / React 19 / Zod, App Router). Read-only on the DB (`better-sqlite3` `readonly`+`fileMustExist`). `lib/` = TS ports of the §2.3 helpers; `next.config.ts` proxies `/health` + `/api/*` to gunicorn (`CLASSIC_ORIGIN`) | `lib/schemas.ts`, `lib/db.ts`, `lib/plotly/figure.ts`, `lib/tabs/*`, `app/ui-api/run-crawl` | — |
+| `web/components/` + `web/app/{tokens,globals}.css` | UI-01 shared shell, page identity/artwork, filters, badges, metric cards, panels, alerts and accessible tables. Colours use theme tokens; artwork is local under `web/public/art/` | `Shell`, `PageHeading`, `ArtworkHeader`, `FilterPanel`, `Badge`, `MetricCard`, `DashTable`, `DashTabs`, `PlotlyChart` | — |
+| `Product/docs/UI_HANDBOOK.md` + `UI_REFRESH_PLAN.md` | Supplemental UI reference, departures and acceptance record. Repeatable browser QA: `Product/next_rebuild/scripts/qa-phase5.cjs` | UI-01 | — |
 | `web/lib/generated/products-config.json` | **Generated** — never hand-edit. Rebuilt from `products_config.py` on every Railway build | — | — |
 | `export_web_config.py` | Build step: writes the JSON above, and **fails the build** if `web/lib/config.ts` ticker groups / colours drift from `config.py` | `PC_KEYS`, `KNOWN_UNGROUPED` | ~110 |
 | `Product/next_rebuild/` | WEB-01 **parity harness** (supplemental): `npm test` runs the golden suite against `Git_Deploy/web` via the `@web` alias; `npm run stage` builds the deploy copy locally in `.stage/` | `tests/`, `scripts/qa-*.cjs`, `fixtures/` | — |
@@ -163,6 +178,7 @@ Paths in the table below are relative to **`Product/Git_Deploy/`** unless a fold
 | Change what market data is crawled | `crawler.py` |
 | Change supply-chain scraping logic | `supply_chain_crawler.py` |
 | Update monthly curated numbers (DRAM, capacity, retail, Steam, demand) | `products_config.py` (`CURATED_*` lists) → re-run `supply_chain_crawler.py`. **Removing a row only propagates for the two lists whose loader reconciles** — `CURATED_DRAM_SPOT` and `CURATED_RETAIL_PRICES` (§9, SC-14) |
+| Change a UI colour, or the light/dark theme | `web/app/tokens.css` (both themes) **and** `TOKENS` in `web/lib/theme.ts` — `tests/theme.test.ts` fails if they differ or a pair drops below WCAG AA. UI code uses `var(--token)` via the `lib/config.ts` constants; charts may too (`PlotlyChart` resolves them per theme). Series colours are fixed hex, ≥3:1 on both chart surfaces; `CHART_COLORS` must also change in `config.py` (build drift check). Plan + handbook: `Product/docs/UI_REFRESH_PLAN.md`, `UI_HANDBOOK.md` (UI-01) |
 | Add/modify a dashboard tab | **`web/`** (`lib/tabs/*`, `components/`) — §6.2. `npm test` + `npm run stage` in `Product/next_rebuild` |
 | Touch IV / options data | `iv_crawler.py` (**default, cloud-native**); `ibkr_options_crawler.py`, `Product/local/ibkr_relay.py`, `ibkr_config.json` (dormant IBKR path — see §11) |
 | Show P/E, market cap, or any valuation figure | `ticker_valuation_history` via `valuationSnapshot()` in `web/lib/valuation.ts` + the Financials tab (`web/lib/tabs/financials.ts`). **Never** from `quarterly_financials` — §9 F-02 |
@@ -170,6 +186,7 @@ Paths in the table below are relative to **`Product/Git_Deploy/`** unless a fold
 | Add a deploy-time data-integrity cleanup | `crawler.py` `purge_contaminated_valuation_cols()` pattern → call it from the `--purge-only` branch; `startup.sh` already runs that on every boot |
 | Change how often a crawler runs, or add a scheduled job | `JOB_SPECS` in `job_heartbeat.py` — **the only place**. `scheduler.py` and the `/health` + navbar reporting both read it, so editing one dict moves both. A crawler not listed there is unscheduled AND unmonitored (§9 F-01) |
 | Check whether the crawlers are actually running | `/health` → `jobs` / `overdue_jobs` / `crawl_ok`, the navbar `crawl-status-badge`, or `python3 scheduler.py --status` |
+| See every data source's status, its crawl history, and which charts it feeds | **🩺 Data Health tab** (`?tab=health`, `web/lib/tabs/health.ts`). Per-source status = `freshnessReport()` + the feeding scraper's last `crawl_source_runs` result (or the job's `crawl_runs` outcome); source → chart map = `EXACT`, scraper → source map = `SCRAPER_SOURCES` in that file. **Adding a scraper:** add it to the `steps` list in `crawl_supply_chain()` AND to `SCRAPER_SOURCES` (DH-01) |
 | Change how an IV source is labelled in the UI | `IV_SOURCE_META` / `ivSourceMeta()` in `web/lib/iv-source.ts` — §2.3 |
 | Add an HTTP endpoint | `api_server.py` Flask `@server.route` — see §6.3; add a contract check to `Product/tests/test_api_contract.py` |
 | Export the full dataset | `GET /api/export-bundle` (⬇️ Download Data navbar button) → zip of xlsx + db; or `/api/export-xlsx` / `/api/export-db` for one file — see §6.3 |
@@ -179,7 +196,7 @@ Paths in the table below are relative to **`Product/Git_Deploy/`** unless a fold
 | Change the Claude project's Instructions field | `Product/docs/PROJECT_INSTRUCTIONS.md` → re-paste into the field. Never edit the field alone (§12.2) |
 | Check whether prod data is actually persistent | `/health` → `volume_ok`; see §5.1 |
 | Check whether a data source has gone quiet | `/api/db-stats` → `freshness` / `stale_sources` / `data_ok`, or the navbar badge; see §6.5 |
-| Add a table (and keep it monitored) | `_FRESHNESS_SPEC` in `api_server.py` (feeds `/api/db-stats`) **and** `FRESHNESS_SPEC` in `web/lib/freshness.ts` (feeds the navbar chip) — two copies since Phase 5; change both in one edit or the badge and the API disagree (§6.5) |
+| Add a table (and keep it monitored) | `_FRESHNESS_SPEC` in `api_server.py` (feeds `/api/db-stats`) **and** `FRESHNESS_SPEC` in `web/lib/freshness.ts` (feeds the navbar chip) — two copies since Phase 5; change both in one edit or the badge and the API disagree (§6.5). Then add its row (label, producer job, affected charts) to `EXACT` in `web/lib/tabs/health.ts` — `tests/health.test.ts` fails on an unmapped fixture key |
 
 ### 2.3 Shared helpers (do NOT redefine inline)
 
@@ -365,7 +382,10 @@ row. Observed-only, **not backfillable** — same contract as the IV series, §1
 `company_info` (ticker PK) ·
 `crawl_runs` (audit log; `job` + `note` columns added 2026-08-02 by `job_heartbeat.ensure_schema()`.
 `job` DEFAULTs to `'market'`, so pre-existing rows backfill to what they in fact were.
-One row per crawler run — this is the heartbeat the schedule and `/health` key on, F-01).
+One row per crawler run — this is the heartbeat the schedule and `/health` key on, F-01) ·
+`crawl_source_runs` (DH-01, created by `job_heartbeat.ensure_schema()`; one row per **scraper** inside a
+`supply_chain` run: `run_id`→`crawl_runs.id`, `source`, `status` `ok`/`no_data`/`error`, `rows_written` =
+`total_changes` delta, `error`. Written by `run_source()`; read by the Data Health tab).
 
 Created by `supply_chain_crawler.py`:
 `sc_products` · `sc_prices` (product_id,date,source) · `sc_market_share` (Steam GPU share) ·
@@ -403,78 +423,78 @@ two producers, distinguished only by `source`):
 | `PORT` | auto-injected by Railway | **never set manually** (§7 rule 8) |
 | `CLOUD_URL` | local `ibkr_relay_config.json` | the live Railway URL |
 
-**Deploy:** see **§5.0** — this folder is **not** a git working tree and agents do **not** push.
+**Deploy:** see **§5.0** — `Product/Git_Deploy/` is a git working tree of `main`; agents commit
+and push **only** when Simpo explicitly asks, or after asking and getting approval (§7 rule 12).
 
 **Force a fresh crawl:** temporarily rename `DB_PATH` in Railway Variables to a new path
 → redeploy (crawlers run because new DB has 0 rows) → rename back. Railway SSH is
 unreliable (closes immediately) — do not depend on it.
 
-### 5.0 Deployment workflow — human-in-the-loop upload (read before you finish any task)
+### 5.0 Deployment workflow — git, push only on explicit ask or approval (read before you finish any task)
 
 ```
-Product/Git_Deploy/ (Mac) ─[ Simpo uploads MANUALLY ]─►  GitHub repo (main, repo root)
-                                                          │  auto-deploy on commit
-                                                          ▼
-                                                  Railway → live URL
+Product/Git_Deploy/ (Mac, git work tree) ─[ agent: commit + push — ONLY on explicit ask/approval ]─►
+        GitHub SiMori92/Semi_data  main, repo root  ─[ Railway auto-deploys every push ]─►  live URL
 ```
 
-Four facts that constrain every agent working here:
+Since **2026-11-22 (GIT-01)** `Product/Git_Deploy/` is a real git working tree of
+`https://github.com/SiMori92/Semi_data` (`origin`, branch `main`). Facts every agent works from:
 
-1. **This folder is not a git clone.** There is no `.git` directory. `git status`, `git diff`,
-   and `git log` do not work, so an agent **cannot** derive what it changed from git.
-2. **Agents never touch git.** No `git add`, no `commit`, no `push`, and above all no
-   `git init` — initialising a repo here would create a second, divergent history that
-   looks authoritative to the next agent. Editing files is the whole of an agent's job.
-3. **Simpo uploads to GitHub by hand.** Railway watches **`main`, repo root**, and redeploys
-   on every commit. Nothing an agent writes reaches production until that upload happens.
-4. **`Product/Git_Deploy/` is the GitHub repo root**, flat and 1:1 (§2.1). The upload set is
-   its contents, plus `CLAUDE.md`/`BACKLOG.md` from the project root. Manifest paths are
-   therefore **GitHub-root** paths — `api_server.py`, not `Product/Git_Deploy/api_server.py` —
-   because that is where the file lands. A file edited anywhere else did not ship.
+1. **A push to `main` IS a production deploy.** Railway redeploys on every push. There is no
+   staging branch, no CI and no PR gate (§6.4) — the local §6.4 loop is the only check.
+2. **When an agent may write to git** (§7 rule 12):
+   - *Read-only git is always allowed* in `Product/Git_Deploy/`: `status`, `diff`, `log`, `show`,
+     `fetch`, `ls-files` — use them to derive what changed instead of reconstructing it by hand.
+   - *Commit and push* happen **only** when Simpo explicitly asks for it in the current
+     conversation ("commit and push", "deploy it"), **or** after the agent asks — naming the files
+     and the commit message — and Simpo approves. Approval covers that one commit/push only; it
+     does not carry over to the next change or the next session. When unsure, ask.
+   - Never: `git init`, `--force`/`--force-with-lease` push, history rewrites (`rebase -i`,
+     `reset --hard` on pushed commits, `commit --amend` after push), new branches/tags pushed
+     without a request, or edits to `.git/config`/credentials.
+3. **`Product/Git_Deploy/` is the repo root**, flat and 1:1 (§2.1). `CLAUDE.md` / `BACKLOG.md`
+   are the exception: on GitHub they sit at the repo root, here they live at the **project root**.
+   The work tree excludes them by **sparse-checkout** (`git sparse-checkout list` →
+   `!/CLAUDE.md`, `!/BACKLOG.md`), so there is no second copy inside the deploy folder; stage the
+   project-root copies with `sh Product/local/git_stage_root_docs.sh` (`--check` = dry run).
+   Never copy the docs into `Product/Git_Deploy/` by hand.
+4. **`Semi_data/` (project root) is superseded** by this work tree — a stale 2026-10-30 clone.
+   Never edit, commit or push from it.
 
-**Therefore: an agent's deliverable is edited files PLUS an upload manifest.** End every
-task that touches a deployable file with an explicit list — there is no `git status` to
-recover it from later, and a file the agent forgot to name is a file that never ships:
+**The approved commit procedure** (run from `Product/Git_Deploy/`):
 
+```bash
+git fetch origin && git status -sb          # must be on main; if behind: git pull --ff-only
+                                            # (never merge/rebase over someone else's work without asking)
+# run the §6.4 checks on these exact files first
+git add <each file by path>                 # NEVER `git add -A` / `git add .` — name every file
+git rm  <each retired file by path>         # deletions are now real: they leave production too
+sh ../local/git_stage_root_docs.sh          # if CLAUDE.md / BACKLOG.md changed
+git diff --cached --stat                    # re-read: exactly the approved set, nothing else
+git commit -m "<what + why>"                # end with the session's attribution line, if any
+git push origin main                        # = deploy
+git log origin/main --oneline -1            # confirm the push landed; report the SHA
 ```
-UPLOAD TO GITHUB (main, repo root) — paths below are GitHub-root paths.
-Local source: Product/Git_Deploy/  (+ CLAUDE.md / BACKLOG.md from the project root)
-  M  api_server.py           ← local  Product/Git_Deploy/api_server.py
-  M  supply_chain_crawler.py ← local  Product/Git_Deploy/supply_chain_crawler.py
-  M  CLAUDE.md               ← local  <project root>/CLAUDE.md
-  A  requirements.txt        ← local  Product/Git_Deploy/requirements.txt
-  D  local/old_relay.py      ← DELETE in GitHub; a re-upload will NOT remove it
-```
 
-**The failure mode this exists to prevent:** manual upload propagates *additions and
-edits* but **never deletions or renames**. Drag-and-drop and the GitHub web uploader add
-files; they cannot remove one, and a rename uploads the new name while the old name stays
-live and keeps being deployed. That is SC-14 (§9) one level up: a withdrawal that reads as
-complete in this folder and is a no-op in production. Deletions and renames must be
-performed **in GitHub**, explicitly, and must be called out in the manifest with `D`/`R`.
+**Still true from the manual-upload era:** an agent's report names every file added, modified
+and deleted (now = `git diff --cached --stat` / the commit SHA, not a hand-typed manifest).
+`.gitignore` is now enforced by git, but a `git add` of an explicit path can still override it —
+so never name a `DB_Backup/` file, a `*.db`, `.env`, or anything under `archive/` (§7 rule 7).
+Simpo may still upload through the GitHub web UI; that is why every procedure starts with
+`git fetch` and refuses to proceed when `main` has moved unexpectedly.
 
-**And: the GitHub web uploader ignores `.gitignore`.** Dragging a folder in uploads
-`__pycache__/`, `.DS_Store`, and anything else sitting beside the code. Since 2026-08-23 the
-hazards live in their own folders — `DB_Backup/` (multi-MB **production data dumps**) and
-`archive/` — and the defence is structural: **upload only the files named in the manifest,
-never a folder.** `Product/Git_Deploy/` is deliberately flat and holds nothing that must not
-ship, so "everything in Git_Deploy, nothing else" is a rule you can execute without judgement.
-§5.2's rule that backups never enter git is enforced by `.gitignore` in a real clone and by
-*you* here.
-
-**Verification is split across two people.** §12's "deploy is not done until verified" still
-holds, but the agent owns only the local half:
+**Verification is split across two people.** §12's "deploy is not done until verified" still holds:
 
 | Step | Who | Check |
 |------|-----|-------|
-| Local test | agent | §6.4 loop — every tab, no callback errors, row counts > 0 |
-| Manifest | agent | every changed/added/deleted file listed, deletions flagged |
-| Upload | Simpo | GitHub `main`, repo root, listed files only |
-| Build | Simpo | Railway → service → Deployments → latest → live logs |
-| Prod | Simpo | `/health` (`volume_ok`, `crawl_ok`), `/api/db-stats` |
+| Local test | agent | §6.4 loop — every tab, no page errors, row counts > 0 |
+| Approval | Simpo | explicit ask, or "yes" to the agent's named file list + message |
+| Commit + push | agent | named files only; `git diff --cached --stat` re-read before commit; report the pushed SHA |
+| Build | agent or Simpo | Railway → service → Deployments → latest → build + deploy logs |
+| Prod | agent or Simpo | `/health` (`volume_ok`, `crawl_ok`), `/api/db-stats`, click through the changed tabs |
 
-An agent that reports "deployed" or "pushed" is reporting something that did not happen.
-The honest terminal state is **"ready to upload — manifest below."**
+Without an explicit ask or approval, the honest terminal state is still **"ready to commit —
+files below"**. An agent that reports "deployed" means it pushed and saw the SHA on `origin/main`.
 
 ### 5.1 Durability: the volume guard (read before touching `DB_PATH` or `startup.sh`)
 
@@ -519,7 +539,7 @@ line of defence behind the local script, and a failure there is an incident, not
 Backups land in **`DB_Backup/`** at the project root. That is the folder contract (§2.1
 rule 4), and it is enforced by `BACKUP_DIR` in both `Product/local/backup_local.sh` and the
 launchd plist — not by remembering to file the download afterwards. `DB_Backup/` is
-production data and never enters an upload manifest (§7 rule 7).
+production data and never enters a commit (§7 rule 7).
 
 | Layer | What | Restorable? |
 |-------|------|-------------|
@@ -570,6 +590,10 @@ curl https://web-production-e3819.up.railway.app/api/db-stats \
 - Logging: `print(f"[{datetime.utcnow():%Y-%m-%d %H:%M:%S}] …")`.
 
 ### 6.2 Next.js tab pattern (WEB-01; the Dash callback pattern retired in Phase 5)
+- Layout (UI-01 Phase 2): `components/Shell.tsx` = sidebar navigation + topbar (`NavStatus`) + one `<main id="main">`; filters live in `components/FilterPanel.tsx`. No Bootstrap — every class is defined in `app/globals.css` (colours only via `tokens.css` variables).
+- Page identity (UI-01 Phase 3): `PageHeading.tsx` + `lib/page-headings.ts` supplies one H1 per tab, before filters. `ArtworkHeader.tsx` + `lib/artwork.ts` shuffles local `public/art/` images per tab visit/reload, never per filter or status poll (`semi-artwork-shuffle-v1` session storage). Dockerfile and staging copy `public/` into standalone output.
+- Presentation (UI-01 Phase 4): `Badge.tsx` + `lib/presentation.ts` render labelled states; `MetricCard.tsx` is shared by Overview and Health (the latter through `DashTree`’s `semi_ui` node). `Card`/`card()` use `.panel`; section titles, alerts and source footers share classes in `globals.css`. `DashTable` supplies focusable labelled scroll regions and keyboard sort buttons (`aria-sort`).
+- Acceptance details (UI-01 Phase 5): Supply Chain tabs use roving keyboard focus and linked tabpanels; Cycles has a named selector. `PlotlyChart` reserves chart height while loading and reports failures with a page-reload action. Artwork fallback is preloaded before its caption appears; total image failure shows an unavailable state.
 - Tabs are routed by `?tab=<id>` (`web/lib/params.ts` `TABS`); `app/page.tsx` queries the DB
   server-side and passes plain data to client components (`components/`). Charts are Plotly
   figures built by `lib/plotly/figure.ts` and rendered by `PlotlyChart.tsx`.
@@ -577,7 +601,7 @@ curl https://web-production-e3819.up.railway.app/api/db-stats \
   Zod (`parseView`), so a bad query string falls back to a default instead of crashing.
 - The UI is **read-only** on the DB (`lib/db.ts`). Anything that writes goes through an
   `api_server.py` route (e.g. ⚡: `/ui-api/run-crawl` → `POST /api/run-crawl` with the key server-side).
-- **Add a tab:** a `TABS` entry + a `lib/tabs/<name>.ts` builder + a `case` in `page.tsx`; then
+- **Add a tab:** a `TABS` entry (`label`, and `tickers: true` if it reads the ticker/date filters — that is what shows the filter panel) + an icon in `ICONS` (`components/Shell.tsx`) + a `PAGE_HEADINGS` entry (`lib/page-headings.ts`) + a `lib/tabs/<name>.ts` builder + a `case` in `page.tsx`; then
   `npm test` and `npm run stage` (§6.4), and click through it in the staged build.
 
 ### 6.3 Flask endpoint pattern
@@ -617,7 +641,7 @@ never buffer a workbook through a client-side fetch/JSON response (the gunicorn 
 ### 6.4 Local dev loop
 ```bash
 # Run from INSIDE the deploy folder: Git_Deploy is what the cloud sees as CWD.
-cd "/Users/simpochiu/Documents/Claude - Industry Data Pj/Product/Git_Deploy"
+cd "/Users/simpochiu/Projects/Invest-Industry Data Pj/Product/Git_Deploy"
 pip3 install -r requirements.txt
 python3 crawler.py --quick          # prices + financials (~2 min)
 python3 supply_chain_crawler.py
@@ -629,7 +653,7 @@ npm run stage                          # build the deploy copy of web/ like Rail
 ```
 Then click through **every tab**, exercise dropdowns/date-pickers/buttons, watch for Next's red
 "Application error" overlay and for 500s from `/health` / `/api/*` in the staged build. Validate DB row
-counts (all expected tables > 0) before handing the manifest over for upload (§5.0).
+counts (all expected tables > 0) before asking to commit, or committing on an explicit ask (§5.0).
 
 Tests live in `Product/tests/` — supplemental, so since 2026-08-23 they no longer ship to
 GitHub either — and are **never invoked by `startup.sh`** — the deploy does not run
@@ -687,17 +711,20 @@ threshold and the SLA here in agreement (e.g. Steam: 120 d ↔ 4 months).
 | 4 | *(retired, Phase 5)* Never nest a callback Output inside another callback's Output | Dash 4.x circular-dependency / tab-render conflicts |
 | 5 | Never use `python` on macOS — use `python3` | macOS `python` is v2; Railway uses `python` |
 | 6 | Never use `X \| Y` union syntax in signatures | Railway may run older Python; use `Optional[X]` |
-| 7 | Never put `.env`, `ibkr_relay_config.json`, `*.db`, `DB_Backup/`, `archive/`, or a `semiconductor_data_*/` snapshot in the upload set — and never write a secret's **value** into a tracked file, including this one | They are gitignored, but the GitHub web uploader **ignores `.gitignore`** (§5.0), so the only enforcement is the manifest. `RELAY_API_KEY` sat in plaintext in §5 of this file and shipped to GitHub with every upload — redaction does not undo history, so a leak means **rotate** |
+| 7 | Never put `.env`, `ibkr_relay_config.json`, `*.db`, `DB_Backup/`, `archive/`, or a `semiconductor_data_*/` snapshot in a commit or upload — and never write a secret's **value** into a tracked file, including this one | They are gitignored, but an explicit `git add <path>` overrides `.gitignore`, and the GitHub web uploader ignores it entirely (§5.0) — so name files deliberately. The repo is **PUBLIC**. `RELAY_API_KEY` sat in plaintext in §5 of this file and shipped to GitHub with every upload — redaction does not undo history, so a leak means **rotate** |
 | 8 | Never set `PORT` as a Railway Variable | Railway injects it; a manual value crashes gunicorn |
 | 9 | Never use `[ ! -s "$DB_PATH" ]` to decide on seeding | A schema-only DB is non-empty (~68 KB) but has 0 rows; use a row-count check |
 | 10 | *(retired, Phase 5)* Never put `/` in a Dash component ID | Slashes break Dash's internal URL routing |
 | 11 | Never move a `.py`, `startup.sh`, `Procfile`, `railway.toml`, `Dockerfile`, or `requirements.txt` out of `Product/Git_Deploy/`, and never create a subfolder inside it other than **`web/`** (the Next.js app: its own `package.json`, built in the image, started by `startup.sh` after gunicorn moves to an internal port). Nothing under `web/` is imported by Python, nothing outside `web/` is imported by Node, and `web/node_modules`/`.next` never exist locally inside Git_Deploy (build them via `npm run stage`) | Railway builds from the repo root; `startup.sh` invokes crawlers by bare filename and `gunicorn api_server:server` resolves the module from CWD. A move that looks purely cosmetic fails at container boot — *after* the old container is gone. `Product/docs`, `Product/tests`, `Product/local` and `archive/` are safe precisely because nothing at boot references them and nothing in them ships (§2.1) |
-| 12 | Never run `git` in this folder — no `init`, `add`, `commit`, or `push` | It is not a clone (§5.0). `git init` would fabricate a second history that the next agent reads as authoritative; the other verbs simply fail. Deployment is Simpo's manual upload — an agent's job ends at edited files + an upload manifest |
-| 13 | Never let a file removal ship as a local delete alone | Manual GitHub upload propagates adds and edits, never deletions or renames (§5.0). A deleted-here file keeps deploying forever — the file-level form of SC-14 (§9). Flag every `D`/`R` in the manifest so it is performed **in GitHub** |
-| 14 | Never upload a file from outside `Product/Git_Deploy/` — the only exceptions are `CLAUDE.md` and `BACKLOG.md` | The deploy boundary is the folder (§2.1). Uploading a supplemental file puts a second copy of it in production's source of truth, where the next agent reads it as live. The inverse is the sharper edge: a file you *edited* outside `Git_Deploy` did **not** ship, however finished it looks locally |
+| 12 | Never commit or push unless Simpo explicitly asked for it, or approved the named files + message when you asked — and never `git init`, force-push, rewrite pushed history, `git add -A`/`.`, or run git anywhere but `Product/Git_Deploy/` | A push to `main` is a production deploy (Railway), with no CI or review in between (§5.0). Approval covers one commit/push, not the next. Until 2026-11-22 agents ran no git at all; a second history (`git init`) or a stray whole-folder add is how `DB_Backup/` dumps or a stale tree reach the public repo |
+| 13 | Never let a file removal ship as a local delete alone | Delete with `git rm <path>` in the approved commit (or, for a GitHub web upload, delete it **in GitHub**). A file removed only from the folder keeps deploying forever — the file-level form of SC-14 (§9). List every `D`/`R` in the file list you ask approval for |
+| 14 | Never commit a file from outside `Product/Git_Deploy/` — the only exceptions are `CLAUDE.md` and `BACKLOG.md`, staged by `Product/local/git_stage_root_docs.sh` | The deploy boundary is the folder (§2.1). Uploading a supplemental file puts a second copy of it in production's source of truth, where the next agent reads it as live. The inverse is the sharper edge: a file you *edited* outside `Git_Deploy` did **not** ship, however finished it looks locally |
 | 15 | Never move a file without updating every absolute path that names it — launchd plists, cron lines, `_ROOT`/`__file__` lookups, script headers | The 2026-08-23 reorg silently killed both the daily backup (plist pointed at the old `local/backup_local.sh`) and the entire PassMark suite (`_ROOT` resolved to `Product/`, not the deploy folder). Neither raised; both looked filed-away and correct. A move is a **config change**, and the failure surfaces at 09:15 tomorrow, not now (§9) |
 
 ### 7.1 The Plotly template anti-pattern (read before touching any chart)
+
+UI-01 charts are light by default, with dark values resolved from the same CSS tokens by
+`PlotlyChart`; the template/layout ownership rule below applies in both themes.
 
 `PLOTLY_TEMPLATE["layout"]` (spread as `_base_layout`) **already contains** `font=`, `xaxis=`,
 and `yaxis=` keys. Passing any of those again as explicit kwargs to `update_layout()` throws
@@ -841,7 +868,11 @@ Tone: professional, objective, financial, analytical.
 | **WEB-01e** The first cutover deploy served the classic Dash UI: `!!! node not found — falling back …` | `nixpacks.toml` added Node and the web build, but Railway builds this service from the root **`Dockerfile`** (`python:3.11-slim`, no Node) — `railway.toml`'s `builder = "NIXPACKS"` notwithstanding. The build log's first line says which: "load build definition from Dockerfile". The startup.sh fallback kept the site up, as designed | Web build moved into a `web` stage of the `Dockerfile`; `nixpacks.toml` deleted. Also settled the WEB-01b unknown: prod Python = **3.11**. **Read the build log's first lines before assuming which builder runs — a config file the builder never reads fails silently** |
 | **WEB-01f** The Dockerfile `web` stage failed in 8 s at `npm ci` | `better-sqlite3`'s install script is `node-gyp rebuild`. npm 11 (this Mac) skips unapproved install scripts, so every local build ran without it; npm 10 (the `node:22` image) runs it, and `node:22-bookworm-slim` has no compiler. The package ships N-API prebuilds (`prebuilds/linux-x64.node`), which are what actually loads | `npm ci --ignore-scripts` in the Dockerfile, reproducing the tested configuration. **A lockfile's `hasInstallScript` is not the whole story — check `npm install-scripts ls`, and match the npm major the build image uses** |
 | **WEB-01g** (Phase 5 QA, local) The staged Next proxy answered `/health` and every `/api/*` with **500** while gunicorn answered directly | Not a code bug: a leftover `next-server` from an earlier test still held `127.0.0.1:3100`; a specific-address bind wins over the new `*:3100` one, so requests went to the stale server, whose rewrite target was a gunicorn that no longer existed. Prod is unaffected — one container, fresh ports | Retested on a free port: all green. **Before reading an e2e failure as a regression, `lsof -nP -iTCP:<port> -sTCP:LISTEN` — two listeners on one port means you are testing the wrong process** |
+| **DH-01** A single scraper exception silently cancelled every scraper after it, and per-source failures were invisible | `crawl_supply_chain()` ran 8 scrapers in one `try`: PassMark raising meant Steam, TrendForce and all IR scrapers never ran that week, and `crawl_runs` (one row per JOB) could only say "failed" for the lot — or "completed" when a scraper swallowed its own error and wrote nothing | Each scraper runs through `job_heartbeat.run_source()`: exception caught + rolled back, outcome (`ok`/`no_data`/`error`, rows written) recorded in `crawl_source_runs`, the rest continue. Job = `failed` only when **no** scraper wrote (`finish_job` contract), with the per-source tally in `note`; shown on the 🩺 Data Health tab. **Isolate independent sources inside a job, and log at the granularity you need to diagnose** |
 | **RE-05** The daily backup agent was "reloaded" in RE-03 on paper but was never installed; once installed (2026-11-16) launchd exited **126** on its first run | `~/Library/LaunchAgents` had no `com.simpo.semibackup.plist` at all. Installed, its first run failed with `Operation not permitted`: macOS privacy (TCC) blocks launchd's `/bin/bash` from reading `~/Documents`, where the script and `DB_Backup/` live. launchd itself could still write `backup.log`, so the log existing proved nothing | Agent installed; **Simpo must grant `/bin/bash` Full Disk Access** (System Settings → Privacy & Security → Full Disk Access → `+` → ⌘⇧G `/bin/bash`), then `launchctl start com.simpo.semibackup`. **A scheduled job on macOS is not verified until it has written its own output — check exit status (`launchctl list`, column 2) and a new `.db.gz`, not the log file** |
+
+| **GIT-01** `BACKLOG` said WEB-01 Phase 5 was "NOT in prod" a week after it had shipped | Manual web uploads left no trace on this Mac: on 2026-11-16 the Phase 5 files were uploaded and `dashboard.py`/`assets/responsive.css` deleted on `main` (`92e22f4`, `8d95baf`), but nothing recorded it locally — the same blind spot as RE-04 | `Product/Git_Deploy/` became a git work tree of `main` (sparse-checkout excludes the root docs); `git fetch` + `log origin/main` is now the source of truth for what shipped. Agents push only on explicit ask/approval (§5.0, §7 rule 12). **If deploys can happen outside the tool that records them, the record will drift — make the deploy path itself the record** |
+| **UI-01 QA** A failed artwork load could display the fallback caption even when its image also failed | Error handling selected the fallback metadata without preloading its image | Preload the fallback before showing its caption; if both fail, show neutral “Artwork unavailable”. Test both selected-image and total-image failure, alongside chart loading/error states |
 
 ---
 
@@ -854,9 +885,9 @@ Tone: professional, objective, financial, analytical.
 | Weekly | Glance at `DB_Backup/backup.log` — no new `.db.gz` means the agent stopped | `launchctl list \| grep semibackup` (col 2 = last exit code) |
 | Quarterly | **Restore drill** — gunzip the newest backup, `PRAGMA integrity_check`, run the dashboard off it | recipe at the foot of `Product/local/backup_local.sh` |
 | Weekly | Glance at the navbar `crawl:` chip — 🔴 means a job stopped succeeding | any page |
-| Monthly | Update `CURATED_DRAM_SPOT`, `CURATED_FAB_METRICS`, retail, Steam, demand | `products_config.py` → re-run crawler → upload (§5.0) |
+| Monthly | Update `CURATED_DRAM_SPOT`, `CURATED_FAB_METRICS`, retail, Steam, demand | `products_config.py` → re-run crawler → commit/push on approval (§5.0) |
 | Monthly | Re-verify PassMark/Newegg scraper selectors (DOM drift) | run `supply_chain_crawler.py` locally |
-| Quarterly | Review ticker list | `config.py` → re-crawl → upload (§5.0) |
+| Quarterly | Review ticker list | `config.py` → re-crawl → commit/push on approval (§5.0) |
 | Monthly | Spot-check IV plausibility vs a public quote (e.g. VIX ≈ SPY IV30) | `python3 iv_crawler.py --dry-run` |
 | On demand | Enable the dormant IBKR IV feed once TWS configured | §11 |
 | On demand | Force full DB rebuild after schema change | rename `DB_PATH` in Railway → redeploy → rename back |
@@ -912,13 +943,12 @@ Many sessions touch this repo. To hand work off cleanly:
 - **While working:** keep edits scoped to one feature/fix; reuse §2.3 helpers; obey §7.
 - **After finishing:** if you discover a new failure mode, add a row to §9. If you defer
   work, record it in `BACKLOG.md` with enough detail (file, line, exact change) that the
-  next agent doesn't re-derive it. Never leave an edit undocumented — there is no git here
-  (§5.0), so an unrecorded edit is unrecoverable by the next session.
-- **End with an upload manifest, not a push:** agents do not deploy (§5.0). Finish with the
-  local §6.4 checks plus the explicit changed/added/**deleted** file list Simpo uploads to
-  GitHub `main`. Deletions and renames must be flagged — a manual upload cannot perform them.
-  Manifest paths are GitHub-root paths; the local source is `Product/Git_Deploy/` (§2.1, §5.0).
-- **Deploy is not done until verified — by Simpo:** upload → watch Railway logs → hit
+  next agent doesn't re-derive it. Never leave an edit undocumented — uncommitted work in
+  `Product/Git_Deploy/` and anything outside it (docs, tests) is invisible to git history.
+- **End with the file list, and push only on an explicit ask or approval** (§5.0, §7 rule 12).
+  Finish with the local §6.4 checks plus the changed/added/**deleted** files (`git status`), then
+  either commit + push because Simpo asked, or ask for approval naming the files and message.
+- **Deploy is not done until verified:** push → watch Railway logs → hit
   `/health` and `/api/db-stats` (§5.0 table).
 
 ### 12.1 How to submit a feature/bug request (standard ticket)
@@ -935,7 +965,7 @@ WHERE:        files + symbols (or the §2.2 capability row); agent confirms.
 DONE-WHEN:    one observable result.
 CONSTRAINTS:  which §7 rules / ask-first gates this touches ("none" is valid).
 VERIFY:       local (tabs/buttons to click) + prod (/health, /api/db-stats).
-DELIVER:      edited files + upload manifest (§5.0). Agent does not deploy.
+DELIVER:      edited files + file list; commit/push only on explicit ask or approval (§5.0).
 ```
 
 For genuinely one-line asks (e.g. "bump Financials window to 16 quarters"), a single
@@ -977,8 +1007,8 @@ is a doc that stays accurate *and* lean — update with intent, not reflex.
 5. **Bump** the "Last structural rewrite" date at the top only for structural changes
    (new/removed/reorganized sections), not for routine row additions.
 6. **Treat this file like code:** read before editing, keep the edit scoped, and list
-   `CLAUDE.md` in the **same upload manifest** as the code change it documents (§5.0) —
-   a doc edit left off the manifest never ships, and the next agent reads the stale copy
+   `CLAUDE.md` in the **same commit** as the code change it documents (§5.0) —
+   a doc edit left out of the commit never ships, and the next agent reads the stale copy
    from GitHub as authoritative.
 
 If your task changed nothing this file asserts, leave it untouched — that is the correct

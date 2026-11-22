@@ -1,0 +1,58 @@
+/*
+ * UI-01 design tokens (Product/docs/UI_REFRESH_PLAN.md §1.1).
+ * LIGHT = the UI Handbook values, exact. DARK = this project's mapped variant
+ * (the handbook is light-only; departure §3.6). Light is the default; the
+ * `semi-theme` cookie sets <html data-theme="dark">.
+ *
+ * KEEP IN STEP with web/lib/theme.ts (TOKENS) — tests/theme.test.ts fails if a
+ * value differs, and checks every contrast floor in both themes.
+ */
+:root {
+  color-scheme: light;
+  --bg: #f7f5ef;            /* workspace canvas */
+  --surface: #fffefa;       /* cards, nav, headers, chart paper + plot */
+  --surface-2: #f2f0e9;     /* zebra rows, raised detail popovers */
+  --text: #263449;          /* main text, metric values */
+  --muted: #626e79;         /* supporting copy, table text */
+  --line: #dedfd9;          /* borders, separators */
+  --grid: #ecebe5;          /* chart gridlines */
+  --blue: #355f87;          /* primary controls, selection, links */
+  --blue-dark: #284a6b;     /* primary hover */
+  --on-blue: #ffffff;       /* text on a primary button */
+  --accent-soft: #eaf0ef;   /* selected / active surfaces */
+  --green: #226850;         /* success text */
+  --red: #a43939;           /* failure text */
+  --amber: #84621e;         /* pending / caution text */
+  --orange: #9a4a12;        /* "abandoned" run state (ours) */
+  --green-soft: #eaf7f2;
+  --red-soft: #fff0ee;
+  --amber-soft: #fbf5e8;
+  --neutral-soft: #f0f3f7;
+  --focus: #5c7e98;
+  --shadow: 0 4px 20px #26344905;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141a23;
+  --surface: #1b2330;
+  --surface-2: #222c3b;
+  --text: #e8e6df;
+  --muted: #a3abb5;
+  --line: #344052;
+  --grid: #2a3442;
+  --blue: #7fa6cc;
+  --blue-dark: #9dbbd9;
+  --on-blue: #10161f;
+  --accent-soft: #263347;
+  --green: #5cbf91;
+  --red: #ec8a8a;
+  --amber: #d9b35c;
+  --orange: #e8955a;
+  --green-soft: #183328;
+  --red-soft: #3a1f22;
+  --amber-soft: #352b17;
+  --neutral-soft: #253040;
+  --focus: #9dbbd9;
+  --shadow: 0 4px 20px #00000040;
+}

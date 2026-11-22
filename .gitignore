@@ -25,8 +25,9 @@ DB_Backup/
 _to_delete/
 archive/
 
-# Python
+# Python (macOS/Drive duplicates appear as "__pycache__ (1)")
 __pycache__/
+__pycache__*/
 *.py[cod]
 *.pyo
 .venv/
@@ -49,6 +50,9 @@ old/
 # products_config.py (export_web_config.py) — but it is uploaded as well so a local
 # `next build` works without Python.
 web/node_modules/
+# Local-only npm setting for the supplemental test harness (vitest peer deps). Railway's
+# `npm ci` (npm 10, Dockerfile) was verified WITHOUT it on 2026-11-22, so it stays out of git.
+web/.npmrc
 web/.next/
 web/next-env.d.ts
 web/*.tsbuildinfo

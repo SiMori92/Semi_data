@@ -98,8 +98,8 @@ export function buildOverview(db: Db, clock: Clock, tickers: readonly string[], 
   const oneYAgo = ymd(addDays(clock.hkt, -365));
   baseLayout(fig, { height: 620, hovermode: "x unified", barmode: "overlay", bargap: 0.1 });
   withRangeSelector(fig, { axis: "xaxis", range: [oneYAgo, end], legendBottom: false, extraHeight: 40 });
-  updateAxis(fig, "yaxis", { title: { text: "Index (Base=100)" }, gridcolor: "#21262d", color: TEXT });
-  updateAxis(fig, "yaxis2", { title: { text: "Volume" }, gridcolor: "#21262d", color: TEXT });
+  updateAxis(fig, "yaxis", { title: { text: "Index (Base=100)" }, gridcolor: "var(--grid)", color: TEXT });
+  updateAxis(fig, "yaxis2", { title: { text: "Volume" }, gridcolor: "var(--grid)", color: TEXT });
   for (const a of fig.layout.annotations as Record<string, Json>[]) a.font = { color: TEXT, size: 13 };
 
   // ── return heatmap ──────────────────────────────────────────────────────

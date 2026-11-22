@@ -122,12 +122,12 @@ function gpuSection(db: Db, clock: Clock, stamp: string): DNode {
   const ERAS: Era[] = [
     ["Ampere Era (A100)", "2020-11-01", "2022-10-31", "rgba(139,92,246,0.07)", "#9d7dea", "Ampere"],
     ["Hopper Era (H100)", "2022-11-01", "2024-05-31", "rgba(0,163,224,0.07)", "#0071C5", "Hopper"],
-    ["Hopper+ (H200)", "2024-06-01", "2024-11-30", "rgba(0,200,180,0.07)", "#00C8B4", "H200"],
-    ["Blackwell (B200)", "2024-12-01", "2026-07-31", "rgba(118,185,0,0.07)", "#76b900", "Blackwell"]];
+    ["Hopper+ (H200)", "2024-06-01", "2024-11-30", "rgba(0,200,180,0.07)", "#00A595", "H200"],
+    ["Blackwell (B200)", "2024-12-01", "2026-07-31", "rgba(118,185,0,0.07)", "#67A200", "Blackwell"]];
   const GA: Marker[] = [["2020-11-01", "A100 Launch", "#9d7dea"], ["2022-11-01", "H100 GA", "#0071C5"], ["2024-01-01", "MI300X GA", "#ED1C24"],
-    ["2024-06-01", "H200 GA", "#00C8B4"], ["2024-12-01", "B200 GA", "#76b900"]];
-  const COLOR: Record<string, string> = { "A100-SXM4-80GB": "#9d7dea", "H100-SXM5-80GB": "#0071C5", "H200-SXM-141GB": "#00C8B4",
-    "B200-SXM-192GB": "#76b900", "MI300X-192GB": "#ED1C24" };
+    ["2024-06-01", "H200 GA", "#00A595"], ["2024-12-01", "B200 GA", "#67A200"]];
+  const COLOR: Record<string, string> = { "A100-SXM4-80GB": "#9d7dea", "H100-SXM5-80GB": "#0071C5", "H200-SXM-141GB": "#00A595",
+    "B200-SXM-192GB": "#67A200", "MI300X-192GB": "#ED1C24" };
   const price = emptyFigure();
   const g = groupBy(df, (r) => r.model_id);
   for (const mid of [...g.keys()].sort(cmpStr)) {
@@ -147,7 +147,7 @@ function gpuSection(db: Db, clock: Clock, stamp: string): DNode {
     if (tflops === undefined || tflops === null || r.price_usd === null) continue;
     const name = r.name ?? r.model_id;
     addSeries(perf, { provenance: "modeled", trace: { type: "scatter", x: [r.price_usd], y: [tflops], mode: "markers+text", name, text: [name],
-      textposition: "top center", textfont: { size: 9 }, marker: { size: 14, color: COLOR[r.model_id] ?? CHART_COLORS[0], line: { width: 1, color: "#30363d" } },
+      textposition: "top center", textfont: { size: 9 }, marker: { size: 14, color: COLOR[r.model_id] ?? CHART_COLORS[0], line: { width: 1, color: "var(--line)" } },
       hovertemplate: `<b>${name}</b><br>Latest price: $%{x:,.0f}<br>FP16 Dense: ${tflops} TFLOPS<extra></extra>` } }, "single-point");
   }
   pyLayout(perf, { title: "Enterprise GPU — FP16 Dense TFLOPS vs Latest Price", height: 360, xaxis_title: "Latest Contract Price (USD/card)",
@@ -179,8 +179,8 @@ function cpuSection(db: Db, clock: Clock, stamp: string): DNode {
   const ERAS: Era[] = [["Genoa + SPR Era", "2022-11-01", "2023-12-31", "rgba(237,28,36,0.06)", "#ED1C24", "Genoa/SPR"],
     ["EMR + Turin Era", "2024-01-01", "2026-07-31", "rgba(0,113,197,0.06)", "#0071C5", "EMR/Turin"]];
   const GA: Marker[] = [["2022-11-01", "EPYC 9654 GA\n(Genoa, Zen 4)", "#ED1C24"], ["2023-01-01", "Xeon 8490H GA\n(Sapphire Rapids)", "#9d7dea"],
-    ["2024-01-01", "Xeon 8592+ GA\n(Emerald Rapids)", "#0071C5"], ["2024-10-01", "EPYC 9965 GA\n(Turin, Zen 5)", "#FF9E1B"]];
-  const COLOR: Record<string, string> = { "EPYC-9654": "#ED1C24", "EPYC-9965": "#FF9E1B", "Xeon-8490H": "#9d7dea", "Xeon-8592+": "#0071C5" };
+    ["2024-01-01", "Xeon 8592+ GA\n(Emerald Rapids)", "#0071C5"], ["2024-10-01", "EPYC 9965 GA\n(Turin, Zen 5)", "#D87C00"]];
+  const COLOR: Record<string, string> = { "EPYC-9654": "#ED1C24", "EPYC-9965": "#D87C00", "Xeon-8490H": "#9d7dea", "Xeon-8592+": "#0071C5" };
   const STYLE: Record<string, [string, string, string]> = { "EPYC-9654": ["solid", "circle", "EPYC 9654 · 96C Genoa"],
     "Xeon-8490H": ["dash", "square", "Xeon 8490H · 60C SPR"], "Xeon-8592+": ["dot", "diamond", "Xeon 8592+ · 60C EMR"],
     "EPYC-9965": ["dashdot", "triangle-up", "EPYC 9965 · 192C Turin"] };
@@ -208,7 +208,7 @@ function cpuSection(db: Db, clock: Clock, stamp: string): DNode {
     if (prod.cores === undefined || prod.cores === null || r.price_usd === null) continue;
     const name = r.name ?? r.model_id;
     addSeries(perf, { provenance: "modeled", trace: { type: "scatter", x: [r.price_usd], y: [prod.cores], mode: "markers+text", name, text: [name],
-      textposition: "top center", textfont: { size: 9 }, marker: { size: 14, color: COLOR[r.model_id] ?? CHART_COLORS[0], line: { width: 1, color: "#30363d" } },
+      textposition: "top center", textfont: { size: 9 }, marker: { size: 14, color: COLOR[r.model_id] ?? CHART_COLORS[0], line: { width: 1, color: "var(--line)" } },
       hovertemplate: `<b>${name}</b><br>Latest price: $%{x:,.0f}<br>Cores: ${prod.cores}  TDP: ${prod.tdp_w ?? "—"}W<extra></extra>` } }, "single-point");
   }
   pyLayout(perf, { title: "Enterprise CPU — Core Count vs Latest Price", height: 360, xaxis_title: "Latest Contract ASP (USD / socket)",
@@ -321,8 +321,8 @@ function ramSection(db: Db, clock: Clock, stamp: string): DNode {
   }
   pyLayout(price, { title: "Enterprise Memory — DRAM & HBM Price, Normalized (USD per GB)", height: 400, xaxis_title: "", yaxis_title: "Price (USD / GB)" });
   const ERAS: Era[] = [["HBM3 Era", "2022-06-01", "2023-12-31", "rgba(204,93,232,0.07)", "#CC5DE8", "HBM3"],
-    ["HBM3E Era", "2024-01-01", "2026-07-31", "rgba(255,107,107,0.07)", "#FF6B6B", "HBM3E"]];
-  const MK: Marker[] = [["2022-06-01", "HBM3 GA (SK Hynix)", "#CC5DE8"], ["2024-01-01", "HBM3E GA (H100/MI300X)", "#FF6B6B"]];
+    ["HBM3E Era", "2024-01-01", "2026-07-31", "rgba(255,107,107,0.07)", "#FF5858", "HBM3E"]];
+  const MK: Marker[] = [["2022-06-01", "HBM3 GA (SK Hynix)", "#CC5DE8"], ["2024-01-01", "HBM3E GA (H100/MI300X)", "#FF5858"]];
   eraAndMarkers(price, ERAS.filter((e) => types.has(e[5])), types.size ? MK : []);
   const end = mem.length ? new Date(Math.max(...mem.map((r) => r.period_dt.getTime()))) : null;
   withRangeSelector(price, { range: end ? [isoDay(addMonths(end, -60)), isoDay(addMonths(end, 2))] : [ymd(addDays(clock.hkt, -365 * 5)), ymd(clock.hkt)], extraHeight: 90 });
@@ -335,7 +335,7 @@ function ramSection(db: Db, clock: Clock, stamp: string): DNode {
     const hbm = spec.class === "HBM";
     addSeries(perf, { provenance: hbm ? "modeled" : "published", trace: { type: "scatter", x: [latest.price_usd_gb], y: [spec.bandwidth_gbs],
       mode: "markers+text", name: pt, text: [pt], textposition: hbm ? "top center" : "middle right", textfont: { size: 10 },
-      marker: { size: 16, color: MEM_COLORS[pt] ?? CHART_COLORS[0], symbol: hbm ? "circle" : "diamond", line: { width: 1, color: "#30363d" } },
+      marker: { size: 16, color: MEM_COLORS[pt] ?? CHART_COLORS[0], symbol: hbm ? "circle" : "diamond", line: { width: 1, color: "var(--line)" } },
       hovertemplate: `<b>${pt} (${spec.config})</b> — ${spec.class}<br>Price: $%{x:.2f}/GB (as of ${latest.period})<br>` +
         `Bandwidth: ${pyG(spec.bandwidth_gbs)} GB/s ${spec.bw_basis}<br>Capacity: ${spec.capacity_gb} GB per device<extra></extra>` } }, "single-point");
   }
@@ -431,7 +431,7 @@ function vsEtfPanel(db: Db, clock: Clock, stamp: string): DNode {
     const b = v.length && v[0] !== 0 ? v[0] : null;
     return { index: idx, values: b ? v.map((x) => (x / b) * 100) : v };
   };
-  const CAT_COLORS: Record<string, string> = { GPU: "#76b900", CPU: "#00A3E0", RAM: "#ED1C24" };
+  const CAT_COLORS: Record<string, string> = { GPU: "#67A200", CPU: "#009DD8", RAM: "#ED1C24" };
   const fig = emptyFigure();
   if (etfM && common !== null) {
     const n = normalise(etfM, common);
@@ -450,7 +450,7 @@ function vsEtfPanel(db: Db, clock: Clock, stamp: string): DNode {
       hovertemplate: `<b>${cat} Price Index</b> (modeled)<br>%{x|%b %Y}<br>Index: %{y:.1f}<extra></extra>` } });
   }
   addHline(fig, 100, { dash: "dash", color: SUBTEXT, width: 1 }, { text: "Base = 100", position: "right", font: { color: SUBTEXT, size: 10 } });
-  const LC: Record<string, string> = { GPU: "#76b900", CPU: "#0071C5", RAM: "#ED1C24" };
+  const LC: Record<string, string> = { GPU: "#67A200", CPU: "#0071C5", RAM: "#ED1C24" };
   const POS = ["top left", "top right", "top left", "top right", "top left", "top right", "top left", "top right", "top left"];
   PC.ENTERPRISE_PRODUCT_LAUNCHES.forEach(([lcat, lshort, , ldate], i) => {
     const col = LC[lcat] ?? SUBTEXT;
@@ -561,7 +561,7 @@ function steamPanel(db: Db, clock: Clock, stamp: string): DNode {
   const U = (x: string) => x.toUpperCase();
   const vendor = (x: string) => U(x).includes("NVIDIA") || U(x).includes("RTX") || U(x).includes("GTX") ? "NVIDIA"
     : U(x).includes("AMD") || U(x).includes("RADEON") || U(x).includes("RX ") ? "AMD" : U(x).includes("INTEL") || U(x).includes("ARC") ? "Intel" : "Other";
-  const CM: Record<string, string> = { NVIDIA: "#76b900", AMD: "#ED1C24", Intel: "#0071C5", Other: SUBTEXT };
+  const CM: Record<string, string> = { NVIDIA: "#67A200", AMD: "#ED1C24", Intel: "#0071C5", Other: SUBTEXT };
   const fig = emptyFigure();
   addSeries(fig, { provenance: "published", trace: { type: "bar", x: top.map((r) => nan(r.share_pct)), y: top.map((r) => r.model_name), orientation: "h",
     marker: { color: top.map((r) => CM[vendor(r.model_name)] ?? SUBTEXT) }, hovertemplate: "<b>%{y}</b><br>Market Share: %{x:.2f}%<extra></extra>" } });
@@ -574,7 +574,7 @@ function steamPanel(db: Db, clock: Clock, stamp: string): DNode {
   const vs = [...agg.keys()].sort(cmpStr);
   const pie = emptyFigure();
   addSeries(pie, { provenance: "published", trace: { type: "pie", labels: vs, values: vs.map((v) => npRound(kahanSum(agg.get(v)!), 1)),
-    marker: { colors: ["#76b900", "#ED1C24", SUBTEXT] }, hole: 0.45, hovertemplate: "<b>%{label}</b>: %{value:.1f}%<extra></extra>" } });
+    marker: { colors: ["#67A200", "#ED1C24", SUBTEXT] }, hole: 0.45, hovertemplate: "<b>%{label}</b>: %{value:.1f}%<extra></extra>" } });
   pyLayout(pie, { title: "GPU Vendor Share", height: 300 });
 
   const asOf = df.map((r) => r.period).sort().slice(-1)[0];
@@ -611,7 +611,7 @@ function demandPanel(db: Db, stamp: string): DNode {
   const tr = (rows: typeof df, t: Record<string, Json>, row: number, col: number) =>
     addSeries(fig, { provenance: "published", trace: { type: "scatter", ...t, x: rows.map((r) => r.period), y: rows.map((r) => nan(r.value)), ...subplotRef(row, col, 2) } as never });
   tr(k("tsmc_revenue"), { name: "TSMC", mode: "lines+markers", line: { width: 2, color: "#0071C5" }, hovertemplate: "<b>TSMC</b> %{x}<br>NT$%{y:.1f}B<extra></extra>" }, 1, 1);
-  tr(k("umc_revenue"), { name: "UMC", mode: "lines+markers", line: { width: 2, color: "#76b900" }, hovertemplate: "<b>UMC</b> %{x}<br>NT$%{y:.1f}B<extra></extra>" }, 1, 1);
+  tr(k("umc_revenue"), { name: "UMC", mode: "lines+markers", line: { width: 2, color: "#67A200" }, hovertemplate: "<b>UMC</b> %{x}<br>NT$%{y:.1f}B<extra></extra>" }, 1, 1);
   tr(k("korea_chip_exports_20d"), { type: "bar", name: "Korea Exports (20d)", marker: { color: ACCENT }, showlegend: false,
     hovertemplate: "<b>Korea chip exports (1-20)</b> %{x}<br>$%{y:.1f}B<extra></extra>" }, 1, 2);
   tr(k("wsts_billings"), { name: "WSTS", mode: "lines+markers", line: { width: 2, color: GREEN }, showlegend: false, hovertemplate: "<b>WSTS</b> %{x}<br>$%{y:.1f}B<extra></extra>" }, 2, 1);
@@ -702,7 +702,7 @@ export function buildSupplyChain(db: Db, clock: Clock): DNode {
     tab(safe("Enterprise GPU", () => gpuSection(db, clock, stamp)), "🖥️  GPU (Enterprise)", "sc-tab-gpu"),
     tab(safe("Enterprise CPU", () => cpuSection(db, clock, stamp)), "⚙️  CPU (Enterprise)", "sc-tab-cpu"),
     tab(safe("Enterprise RAM", () => ramSection(db, clock, stamp)), "💾  RAM (Enterprise)", "sc-tab-ram"),
-  ], { active_tab: "sc-tab-gpu", style: { "--bs-nav-tabs-border-color": "#30363d" } });
+  ], { active_tab: "sc-tab-gpu", style: { "--bs-nav-tabs-border-color": "var(--line)" } });
   return html.Div([
     card([sectionTitle("Supply Chain Intelligence — Enterprise Focus"),
       html.P("Enterprise AI hardware supply chain metrics. GPU: NVIDIA AI accelerators (A100 → H100 → H200 → B200) + AMD MI300X — contract/spot ASP, generation era pricing, " +

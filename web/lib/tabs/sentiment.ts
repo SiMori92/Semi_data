@@ -37,10 +37,10 @@ export function buildSentiment(db: Db, clock: Clock, tickers: readonly string[])
   const sourceNote = html.Div([
     html.Span("📡 Options IV source: ", { style: { color: SUBTEXT, fontSize: "12px" } }),
     html.Span(hasIv ? ivDesc : "Yahoo Finance snapshot IV (crawler.py) / HV30 fallback",
-      { style: { color: ivAllPub ? ACCENT : YELLOW, fontSize: "12px", fontWeight: "600" } }),
+      { className: `badge badge-${ivAllPub ? "published" : "derived"}` }),
     html.Span(hasIv && !ivAllPub ? "  ✳ derived metric — our own constant-maturity construction, not a published index"
       : hasIv ? "" : " — run python3 iv_crawler.py to populate a 30d ATM IV series",
-      { style: { color: SUBTEXT, fontSize: "11px" } }),
+      { style: { color: SUBTEXT, fontSize: "12px" } }),
   ], { style: { marginBottom: "12px" } });
 
   let ivSection: DNode;
@@ -49,7 +49,7 @@ export function buildSentiment(db: Db, clock: Clock, tickers: readonly string[])
     const term = emptyFigure();
     const ivCols = ["iv_current", "iv_1m_avg", "iv_1q_avg", "iv_6m_avg", "iv_1y_avg"] as const;
     const ivLabels = ["Current", "1-Month Avg", "1-Quarter Avg", "6-Month Avg", "1-Year Avg"];
-    const ivColors = [ACCENT, "#74C0FC", "#51CF66", YELLOW, "#CC5DE8"];
+    const ivColors = [ACCENT, "#1896FA", "#2EA843", YELLOW, "#CC5DE8"];
     ivCols.forEach((c, k) => {
       const sub = iv.filter((r) => r[c] !== null);
       if (!sub.length) return;
@@ -101,9 +101,9 @@ export function buildSentiment(db: Db, clock: Clock, tickers: readonly string[])
 
     ivSection = html.Div([
       card([sectionTitle("Options IV — Snapshot Table"), ivTable,
-        html.Div("Source: " + ivDesc, { style: { color: SUBTEXT, fontSize: "11px", marginTop: "6px" } }),
+        html.Div("Source: " + ivDesc, { style: { color: SUBTEXT, fontSize: "12px", marginTop: "6px" } }),
         html.Div("Blank averages/percentiles accumulate daily — option chains cannot be backfilled.",
-          { style: { color: SUBTEXT, fontSize: "11px", fontStyle: "italic" } })]),
+          { style: { color: SUBTEXT, fontSize: "12px", fontStyle: "italic" } })]),
       card(responsiveGraph(term, { displayModeBar: true })),
       dbc.Row([dbc.Col(card(responsiveGraph(pct, { displayModeBar: false })), { width: 6 }),
         dbc.Col(card(responsiveGraph(ivh, { displayModeBar: true })), { width: 6 })]),
@@ -129,7 +129,7 @@ export function buildSentiment(db: Db, clock: Clock, tickers: readonly string[])
           html.Span("⚠️ Source: yfinance ATM snapshot (annualised) — no historical period averages.  ", { style: { color: YELLOW, fontSize: "12px" } }),
           html.Span("Connect Interactive Brokers for full IV term structure.", { style: { color: SUBTEXT, fontSize: "12px" } }),
         ], { style: { marginTop: "8px" } }),
-        missingNote ? html.P(missingNote, { style: { color: SUBTEXT, fontSize: "11px", marginTop: "4px" } }) : html.Span(),
+        missingNote ? html.P(missingNote, { style: { color: SUBTEXT, fontSize: "12px", marginTop: "4px" } }) : html.Span(),
       ]);
     } else {
       ivSection = card([
@@ -159,7 +159,7 @@ export function buildSentiment(db: Db, clock: Clock, tickers: readonly string[])
   if (perf.length) {
     addSeries(scatter, { provenance: "derived", trace: { type: "scatter", x: perf.map((r) => r.perf_5d!), y: perf.map((r) => r.perf_1m!),
       mode: "markers+text", text: perf.map((r) => r.ticker), textposition: "top center",
-      marker: { size: 14, color: perf.map((r) => (r.perf_1m! > 0 ? GREEN : RED)), line: { width: 1, color: "#30363d" } },
+      marker: { size: 14, color: perf.map((r) => (r.perf_1m! > 0 ? GREEN : RED)), line: { width: 1, color: "var(--line)" } },
       hovertemplate: "<b>%{text}</b><br>5-Day: %{x:.1f}%<br>1-Month: %{y:.1f}%<extra></extra>" } });
     addHline(scatter, 0, { dash: "dash", color: SUBTEXT, width: 1 });
     addVline(scatter, 0, { dash: "dash", color: SUBTEXT, width: 1 });

@@ -99,9 +99,11 @@ DASHBOARD_PORT = int(os.environ.get("PORT", 8050))
 DASHBOARD_HOST = os.environ.get("HOST", "127.0.0.1")
 DARK_THEME = True
 
-# Chart colour palette (one per ticker group)
+# Chart colour palette (one per ticker). UI-01 (2026-11-22): 15 hue-spaced colours, each
+# >= 3:1 contrast on BOTH the light (#fffefa) and dark (#1b2330) chart surfaces, min Lab dE 16.5.
+# Mirrored in web/lib/config.ts — export_web_config.py fails the build on drift.
 CHART_COLORS = [
-    "#00D4FF", "#FF6B6B", "#51CF66", "#FFD43B", "#CC5DE8",
-    "#FF922B", "#74C0FC", "#F06595", "#A9E34B", "#63E6BE",
-    "#4DABF7", "#FFA94D", "#DA77F2", "#E599F7", "#96F2D7",
+    "#048BA6", "#E9403B", "#249240", "#9E7A04", "#B654D7",
+    "#D55905", "#1A80E6", "#E33D82", "#578E19", "#109076",
+    "#7276D6", "#A77448", "#D53AC8", "#81842C", "#688396",
 ]

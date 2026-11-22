@@ -7,12 +7,38 @@
 > Convention: when you finish a backlog item, delete its row/section and (if it produced a
 > reusable lesson) add a row to `CLAUDE.md §9 Known Issues`.
 >
-> Last updated: 2026-11-16 (WEB-01 Phase 4 cutover prepared; WEB-01a/b/c confirmed in prod `main@0d1ae85`; backup agent installed but blocked by macOS TCC — RE-05) — earlier: 2026-11-09 11:15 (WEB-01 Phase 3 + QA) — (RE-04: Git_Deploy re-synced to prod `main@c9db2e4`; pending-upload
+> Last updated: 2026-11-22 (UI-01 Phases 0–5 completed locally; ready to upload). Previous deployment baseline: 2026-11-16 (WEB-01 Phase 4 cutover prepared; WEB-01a/b/c confirmed in prod `main@0d1ae85`; backup agent installed but blocked by macOS TCC — RE-05) — earlier: 2026-11-09 11:15 (WEB-01 Phase 3 + QA) — (RE-04: Git_Deploy re-synced to prod `main@c9db2e4`; pending-upload
 > table reconciled against live `/health`; fresh backup pulled; WEB-01 Next.js rebuild opened)
 
 ---
 
-# 🟡 UPLOAD STATE — reconciled 2026-11-09 against prod
+# 🟢 GIT-01 — `Product/Git_Deploy` is now a git work tree of `main` (2026-11-22)
+
+Asked by Simpo 2026-11-22: agents may run git and commit/push **only on explicit ask or approval**
+(CLAUDE.md §5.0, §7 rule 12; `Product/docs/PROJECT_INSTRUCTIONS.md` updated — **Simpo: re-paste it
+into the Claude project's Instructions field**, §12.2).
+
+- Set up without touching a file: `git clone --no-checkout` → `.git` moved into `Product/Git_Deploy` →
+  sparse-checkout `/*` `!/CLAUDE.md` `!/BACKLOG.md` → `git reset`. SHA-256 of every file identical before
+  and after. Origin `https://github.com/SiMori92/Semi_data`, `main@60318b0`. Account `SChiu-project`
+  (gh keyring) has push rights.
+- Root docs are staged by `Product/local/git_stage_root_docs.sh` (no copies inside the deploy folder).
+- `.gitignore`: + `web/.npmrc` (local harness setting; prod `npm ci` verified without it with npm 10.9.2)
+  and `__pycache__*/`. `assets/responsive.css` (stale; deleted on main) → `archive/_to_delete/ui01_phase2_20261122/assets/`.
+- Finding: `main` showed WEB-01 Phase 5 had shipped 2026-11-16 while this file said "NOT in prod"
+  (CLAUDE.md §9 GIT-01). Corrected below.
+- `git status` vs `main` = exactly the UI-01 + DH-01 set below, + `.gitignore`, + the untracked
+  `.env.example` (placeholders only, never on main — commit or leave out: Simpo's call).
+- `Semi_data/` (project root) is superseded; candidate for `archive/_to_delete/` (not moved — Simpo's call).
+- Pre-setup snapshot of the folder: scratchpad `Git_Deploy_before_git_20261122.tgz` (temporary).
+
+**First git deploy APPROVED by Simpo 2026-11-22** (commit + push; `.env.example` left out by choice):
+one commit of the UI-01 + DH-01 set + `.gitignore` + the 4 `git rm` deletions + root docs → `main`.
+The pushed SHA and post-deploy checks are recorded in the next local edit of this file.
+
+---
+
+# 🟡 UPLOAD STATE — reconciled 2026-11-09 against prod (superseded by GIT-01: use `git log origin/main`)
 
 **The 2026-08-09 upload landed** (GitHub `main@89645d9`), and the responsive redesign is live
 on top of it (`main@c9db2e4`, 2026-10-30, pushed from the `Semi_data/` clone — §9 RE-04).
@@ -24,6 +50,298 @@ Evidence `[Data Last Crawled/Updated: 2026-11-08 22:07 UTC]`: `/health` → `sch
 | SC-04/SC-07, F-02, F-01, QA-05, BK-01 code, §5.0/§7 r12–13 | **in prod** (`main@89645d9`). F-02 Financials panel + QA-05 coverage gate: not yet eyeballed in prod — click Financials once |
 | RE-01/RE-02 docs + `.gitignore`, plist/test path fixes | local/doc-only; `.gitignore` + `CLAUDE.md`/`BACKLOG.md` **not on GitHub** (see RE-04 manifest) |
 | RE-04 sync: `dashboard.py` = `main@c9db2e4`, `assets/responsive.css` | Git_Deploy matches prod — **nothing to upload for code** |
+
+---
+
+## UI-01 — UI refresh to the UI Handbook (P2, opened 2026-11-22) — **Phases 0–5 DONE locally 2026-11-22; READY TO UPLOAD**
+
+Plan: `Product/docs/UI_REFRESH_PLAN.md` (decisions D1–D6 recorded there: light + dark option, sidebar nav,
+artwork headers, lucide-react, Next 16.4.5, data-only parity). Handbook copied to `Product/docs/UI_HANDBOOK.md`.
+
+**Phase 0 (groundwork, no visible change):**
+- Next.js 16.4.3 → **16.4.5** (fixes the advisories on 16.0.0–16.4.4; `npm audit` → 0) and `lucide-react@1.70.0`
+  added (unused until Phase 2) in `web/package.json` + lockfile and the harness `package.json`.
+- Parity suite is now **data-only** (D6): `PRESENTATION_KEYS` in `tests/helpers.ts` (styles, class names,
+  colours, fonts) is skipped; data, text, structure, heights and the SC-16 modeled markers are still compared.
+  New `tests/comparator.test.ts` (10 checks) proves both halves.
+- 6 stale `tests/* (1).test.ts` copies (pre-cutover, tested the old `next_rebuild/lib`, not `Git_Deploy/web`)
+  moved to `archive/_to_delete/next_rebuild_tests_dupes_20261122/`. The real suite is **100 tests**; the old 184
+  figure double-counted them.
+- Baseline screenshots: `Product/next_rebuild/screens/ui01-before/` (7 tabs × 1440/900/390 px, no page errors,
+  no page overflow). Baseline findings for Phase 2: the content column scrolls inside a fixed-height box, so the page
+  never scrolls and full-page captures cut off at the fold.
+- DH-01 fix found by the baseline: Data Health tables squeezed to unreadable columns at 390 px → wrapping columns
+  get min-widths and scroll inside the panel (page 9 261 → 4 833 px).
+- Verified: `npm test` 100/100, `npm run stage` clean on 16.4.5, `npm audit` 0.
+
+Phase 0 upload (can ship with DH-01, or on its own):
+```
+  M  web/package.json        ← Product/Git_Deploy/web/package.json
+  M  web/package-lock.json   ← Product/Git_Deploy/web/package-lock.json
+  M  web/lib/tabs/health.ts  ← Product/Git_Deploy/web/lib/tabs/health.ts   (also in the DH-01 manifest)
+  M  BACKLOG.md
+```
+Prod check: Railway build log shows `next build` on 16.4.5; every tab renders as before.
+
+**Phase 1 (tokens + light theme + dark option) — details in the plan's Phase 1 "as built".**
+Light by default (handbook values), dark via the navbar toggle (cookie `semi-theme`, no flash). Colour
+constants are `var(--token)`; `PlotlyChart` resolves them per theme and redraws on toggle. New 15-colour
+chart palette (both themes ≥3:1), mirrored in `config.py`. Bootswatch DARKLY → Bootstrap 5.3.6 bridged
+to tokens (removed in Phase 2). Verified: `npm test` 171/171 (+71 theme checks), `export_web_config --check`
+OK, `npm run stage` OK, 42 screenshots (7 tabs × 3 widths × 2 themes, `screens/ui01-phase1/`) with no
+page errors or overflow, toggle tested in a browser (chart colours switch live; persists across reload).
+
+Phase 1 upload (needs the Phase 0 files too — `lucide-react` is imported by `ThemeToggle`):
+```
+  A  web/app/tokens.css
+  A  web/lib/theme.ts
+  A  web/components/ThemeToggle.tsx
+  M  web/app/layout.tsx  web/app/page.tsx  web/app/globals.css  web/app/responsive.css  web/app/theme.css
+  M  web/lib/config.ts  web/lib/mem.ts  web/lib/overview.ts  web/lib/plotly/figure.ts  web/lib/dash/common.ts
+  M  web/lib/tabs/{supplychain,sentiment,cycles,health}.ts
+  M  web/components/{PlotlyChart,NavStatus,Card,DashTable,DashTree,DashControls,Sidebar}.tsx
+  M  config.py            ← CHART_COLORS (must ship with web/lib/config.ts or the build fails)
+  M  CLAUDE.md  BACKLOG.md
+```
+Prod check: site opens light; "Dark theme" button flips everything incl. charts; reload keeps the choice.
+
+**Phase 2 (shell, sidebar nav, topbar, filter panel, Bootstrap removed)** — details in the plan.
+Verified: `npm test` 172/172, `npm run stage` OK, 16/16 browser behaviour checks, no overflow at 8 widths,
+63 screenshots in `screens/ui01-phase2/` (light 6 widths, dark 3), no page errors.
+
+Phase 2 upload (on top of Phases 0 + 1). **4 deletions must be done in GitHub** (rule 13):
+```
+  A  web/components/Shell.tsx
+  A  web/components/FilterPanel.tsx
+  M  web/app/page.tsx  web/app/layout.tsx  web/app/globals.css  web/app/tokens.css
+  M  web/lib/params.ts
+  M  web/components/{NavStatus,StatusChip,ThemeToggle}.tsx
+  D  web/app/theme.css                   ← DELETE in GitHub (retired Bootstrap CDN stylesheet)
+  D  web/app/responsive.css              ← DELETE in GitHub
+  D  web/components/Sidebar.tsx          ← DELETE in GitHub
+  D  web/components/ActiveTabIntoView.tsx ← DELETE in GitHub
+  M  CLAUDE.md  BACKLOG.md
+```
+(Local copies of the 4 deleted files: `archive/_to_delete/ui01_phase2_20261122/`.) A stale `theme.css` left in
+GitHub is harmless at runtime (nothing imports it) but misleads the next reader.
+Prod check: sidebar navigation on the left, filters panel above Overview, no Bootstrap request in DevTools → Network.
+
+**Phase 3 (page identity + artwork headers)** — completed locally 2026-11-22.
+One serif H1 + eyebrow + description on all 7 tabs, above the filter panel. Four rights-documented
+local paintings shuffle on tab visits/reload; filtering and status polling keep the current art.
+Theme-aware caption, responsive stacking, 12 px attribution; Compare action remains by its date inputs.
+Verified: `npm test` 181/181, `npm run stage` + TypeScript OK, browser layout checks across 7 tabs ×
+6 widths × 2 themes (one H1, artwork loaded, no page overflow), 42 screenshots in
+`Product/next_rebuild/screens/ui01-phase3/`. Browser lifecycle checks passed for filtering, empty
+selection, tab navigation, a real 30-second status poll and reload; all four JPEG URLs returned 200,
+with no page errors. Supplemental QA: `scripts/qa-phase3.cjs`.
+
+Phase 3 upload (on top of Phases 0–2). Paths are GitHub-root paths, source `Product/Git_Deploy/`
+except the two root docs. No deletions in this phase:
+```
+  A  web/components/PageHeading.tsx
+  A  web/components/ArtworkHeader.tsx
+  A  web/lib/page-headings.ts
+  A  web/lib/artwork.ts
+  A  web/public/art/README.md
+  A  web/public/art/monet-water-lilies.jpg
+  A  web/public/art/monet-japanese-footbridge.jpg
+  A  web/public/art/caillebotte-paris-rainy-day.jpg
+  A  web/public/art/pissarro-boulevard-montmartre.jpg
+  M  web/app/page.tsx
+  M  web/app/globals.css
+  M  Dockerfile                         ← copies public/ into standalone (required for art)
+  M  CLAUDE.md                          ← project root
+  M  BACKLOG.md                         ← project root
+```
+Supplemental only (do not upload): `Product/docs/UI_REFRESH_PLAN.md`,
+`Product/next_rebuild/scripts/stage-web.sh`, `scripts/qa-phase3.cjs`, `tests/artwork.test.ts`, screenshots.
+Prod check: open every tab; one heading and a painting appear, images under `/art/*.jpg` return 200;
+change a filter without changing the painting, then switch tabs to advance it. Test in both themes.
+
+**Phase 4 (shared components + table accessibility)** — completed locally 2026-11-22.
+Shared badges (Health/topbar/IV sources), Overview + Health metric cards (4 → 2 columns), 14 px panels,
+16 px section titles, 12 px source footers and shared warning/error alerts. Metric values scale down
+on narrow cards to retain exact amounts on one line. Table regions are focusable and labelled;
+sorting supports keyboard input and announces direction, with page reset/clamping. Plotly toolbars
+sit at the bottom of charts, clear of titles. Existing labels, data and calculations are retained.
+Verified: `npm test` 183/183, `npm run stage` + TypeScript OK; 7 tabs × 6 widths × 2 themes, zero page
+overflow/errors, metric fit, keyboard sorting + horizontal scrolling, warning/IV badge presence and
+toolbar placement. 42 screenshots in `Product/next_rebuild/screens/ui01-phase4/`.
+
+Phase 4 upload (on top of Phases 0–3). Paths are GitHub-root paths, source `Product/Git_Deploy/`
+except root docs. No deletions:
+```
+  A  web/components/Badge.tsx
+  A  web/components/MetricCard.tsx
+  A  web/lib/presentation.ts
+  M  web/components/Card.tsx
+  M  web/components/OverviewTab.tsx
+  M  web/components/DashTable.tsx
+  M  web/components/DashTree.tsx
+  M  web/components/StatusChip.tsx
+  M  web/lib/dash/common.ts
+  M  web/lib/tabs/health.ts
+  M  web/lib/tabs/sentiment.ts
+  M  web/app/page.tsx
+  M  web/app/globals.css
+  M  CLAUDE.md                          ← project root
+  M  BACKLOG.md                         ← project root
+```
+Supplemental only (do not upload): `Product/docs/UI_REFRESH_PLAN.md`,
+`Product/next_rebuild/scripts/qa-phase4.cjs`, `tests/theme.test.ts`, screenshots.
+Prod check: Overview/Health metrics form 4 columns on desktop and 2 on mobile with unbroken amounts;
+Health badges retain their labels; Tab to a table/header and use arrow keys/Enter to scroll/sort;
+Supply Chain modeled warnings remain visible and chart tools stay clear of titles; check both themes.
+Phase 5 acceptance results are recorded below.
+
+
+**Phase 5 (acceptance QA + final handoff)** — DONE locally 2026-11-22.
+Verified: `npm test` 183/183; `npm run stage` + TypeScript OK; 41 acceptance groups including 168
+tab/theme/width cases, keyboard flows, form labels, reduced motion, artwork failures/Back/Forward,
+chart loading/failure/recovery and six fixture states. No unexpected page errors. Report + 36 screenshots:
+`Product/next_rebuild/screens/ui01-phase5/acceptance.json`. 200% zoom was emulated as 720 CSS px
+across 1440 device px in both themes, not a browser-chrome zoom test. No dialogs are used.
+Fixes: Supply Chain sub-tabs now have selected state, linked panels and Arrow/Home/End navigation;
+Cycles has a programmatic selector label; data tables inherit the sans-serif UI font. Charts show
+loading/failure states with a page-reload recovery action. Artwork fallback is preloaded and total
+image failure shows “Artwork unavailable” without an unloaded painting's caption.
+
+Phase 5 incremental upload (on top of Phases 0–4), source `Product/Git_Deploy/` except root docs:
+```
+  M  web/components/DashTabs.tsx
+  M  web/components/DashControls.tsx
+  M  web/components/DashTable.tsx
+  M  web/components/PlotlyChart.tsx
+  M  web/components/ArtworkHeader.tsx
+  M  web/app/globals.css
+  M  CLAUDE.md                          ← project root
+  M  BACKLOG.md                         ← project root
+```
+Supplemental only: `Product/next_rebuild/scripts/qa-phase5.cjs`,
+`screens/ui01-phase5/acceptance.json`, screenshots, `Product/docs/UI_REFRESH_PLAN.md`.
+
+### UI-01 consolidated upload — final current files for Phases 0–5 (= the pending GIT-01 commit, + `.gitignore`)
+
+Use this list if the UI refresh phases have not been uploaded yet. Upload current local files,
+not earlier phase versions. Paths are GitHub-root paths. Source: `Product/Git_Deploy/`, except
+`CLAUDE.md` and `BACKLOG.md` at project root. Do not upload supplemental folders or DB fixtures.
+```
+  A  web/app/tokens.css
+  A  web/components/Shell.tsx
+  A  web/components/FilterPanel.tsx
+  A  web/components/ThemeToggle.tsx
+  A  web/components/PageHeading.tsx
+  A  web/components/ArtworkHeader.tsx
+  A  web/components/Badge.tsx
+  A  web/components/MetricCard.tsx
+  A  web/lib/theme.ts
+  A  web/lib/page-headings.ts
+  A  web/lib/artwork.ts
+  A  web/lib/presentation.ts
+  A  web/lib/tabs/health.ts
+  A  web/public/art/README.md
+  A  web/public/art/monet-water-lilies.jpg
+  A  web/public/art/monet-japanese-footbridge.jpg
+  A  web/public/art/caillebotte-paris-rainy-day.jpg
+  A  web/public/art/pissarro-boulevard-montmartre.jpg
+  M  web/package.json
+  M  web/package-lock.json
+  M  web/app/layout.tsx
+  M  web/app/page.tsx
+  M  web/app/globals.css
+  M  web/lib/params.ts
+  M  web/lib/config.ts
+  M  web/lib/mem.ts
+  M  web/lib/overview.ts
+  M  web/lib/plotly/figure.ts
+  M  web/lib/dash/common.ts
+  M  web/lib/tabs/supplychain.ts
+  M  web/lib/tabs/sentiment.ts
+  M  web/lib/tabs/cycles.ts
+  M  web/components/PlotlyChart.tsx
+  M  web/components/NavStatus.tsx
+  M  web/components/Card.tsx
+  M  web/components/DashTable.tsx
+  M  web/components/DashTabs.tsx
+  M  web/components/DashTree.tsx
+  M  web/components/DashControls.tsx
+  M  web/components/StatusChip.tsx
+  M  web/components/OverviewTab.tsx
+  M  config.py                         ← palette must match web/lib/config.ts
+  M  Dockerfile                        ← copies public artwork into standalone output
+  M  job_heartbeat.py                  ← DH-01: crawl_source_runs table + run_source()
+  M  supply_chain_crawler.py           ← DH-01: per-scraper isolation + outcome logging
+  M  CLAUDE.md                         ← project root
+  M  BACKLOG.md                        ← project root
+  D  web/app/theme.css                 ← delete explicitly in GitHub
+  D  web/app/responsive.css            ← delete explicitly in GitHub
+  D  web/components/Sidebar.tsx        ← delete explicitly in GitHub
+  D  web/components/ActiveTabIntoView.tsx ← delete explicitly in GitHub
+```
+The four retired files are archived locally in `archive/_to_delete/ui01_phase2_20261122/`.
+2026-11-22: the two DH-01 Python files are now IN this list (one upload ships UI-01 + DH-01). Re-verified
+on the final files: `npm test` 183/183, `npm run stage` OK (artwork bundled), `export_web_config --check` OK,
+Python `test_source_runs` 13/13, PassMark 23/23, run lock 18/18. Dockerfile vs prod's pre-Phase-5 copy differs
+ONLY by the `cp -r public …` line + comments, so this upload does NOT ship the held-back WEB-01 Phase 5
+(`api_server.py`, `startup.sh`, `requirements.txt` stay out).
+
+Post-upload checks (Simpo): Railway build + boot/health pass; all 7 tabs render; artwork URLs return
+200; theme persists across reload; filters and comparison work; keyboard sub-tabs/sort work; Run
+crawl reports the real server result and Download data returns the export bundle. Verify volume
+and scheduler health separately. This local UI QA did not run a live crawl or a production export.
+
+---
+
+## DH-01 — 🩺 Data Health tab (P2, 2026-11-22) — **CODE DONE locally; READY TO UPLOAD**
+
+New 7th tab `?tab=health`: (1) KPI strip, (2) one row per freshness key — status 🔴 stale/empty ·
+🟡 in-SLA but producer job's last run failed · ⚪ no rows · 🟢 OK — with latest period, age vs SLA,
+the producer job's last outcome and the **affected charts**, (3) per-job table (last run, last success,
+overdue, 30-day success rate, note), (4) 60-day crawl-run timeline + paged run log from `crawl_runs`.
+Tab itself is read-only. Follow-up 1 (below) adds one table + crawler change; no Flask change. Independent of WEB-01 Phase 5 — upload only these files.
+
+Verified: `npm test` 172/172 (incl. new `tests/health.test.ts`, 4 checks: catalogue covers every fixture
+key, 3 tables built, an injected failed `iv` run surfaces as FAILED in job/history/source rows);
+`npm run stage` build + TypeScript OK; staged server on a copy of the 2026-11-15 prod backup → `/?tab=health`
+200 with every source mapped, other tabs 200, renders with no tickers selected.
+
+Findings it surfaced on that backup (not bugs in DH-01): `sc_prices[passmark]` (210 rows) is stored but
+**no Next chart reads it** (shown as "Not charted"); 9 curated/live supply-chain series are past SLA
+(UMC 145 d, DDR4/5 114 d, Korea 114 d, WSTS 175 d, SEMI 236 d, curated prices 205 d) — SC-04's monthly refresh.
+
+**Follow-up 1 DONE 2026-11-22 — per-source crawl outcomes.** New table `crawl_source_runs` (additive,
+`CREATE TABLE IF NOT EXISTS` in `ensure_schema()`; approved by Simpo "fix backlog DH-01"). Each supply-chain
+scraper runs via `job_heartbeat.run_source()` → `ok` / `no_data` / `error` + rows written; an erroring scraper no
+longer aborts the ones after it. Job = `failed` only if NO scraper wrote; note = `full: 5/8 sources wrote data;
+error: steam_survey; no data: newegg, umc_revenue`; CLI exits 1 on failed. Data Health tab: new "Supply-Chain
+Scrapers" table, source rows show their scraper's result and turn 🟡 naming it, KPI "Crawl problems".
+**Behaviour change to know:** a run where some scrapers error is now `completed` (the others' data landed), so the
+scheduler does NOT retry it within the week — the failure is visible on the tab instead. Previously any error = `failed`
++ hourly-backoff retry of the whole job.
+Verified: `test_source_runs.py` 13/13 (Py 3.11), PassMark 23/23, run lock 18/18, `npm test` 174/174, `npm run stage`
+OK, real orchestrator (fake scrapers) on a copy of the 2026-11-15 prod backup → rendered correctly through Next.
+Prod check: after the next weekly supply_chain run, `sqlite3 … "SELECT source,status,rows_written FROM crawl_source_runs"`
+via a backup, or open `/?tab=health` — the scraper table should have 8 rows (6 on `--quick`).
+
+Follow-ups (not started):
+- `supply_chain_crawler.py:708` `list[dict] … -> dict | None` breaks §7 rule 6 (fails to import on Python 3.9).
+  Harmless in prod (3.11) — fix with `Optional[dict]` / `List[Dict]` next time the file is touched.
+- ~~Next.js security advisory~~ — **resolved by UI-01 Phase 0** (Next 16.4.5, `npm audit` 0 vulnerabilities).
+
+```
+UPLOAD TO GITHUB (main, repo root) — local source Product/Git_Deploy/ (+ root docs)
+  A  web/lib/tabs/health.ts   ← Product/Git_Deploy/web/lib/tabs/health.ts
+  M  job_heartbeat.py         ← Product/Git_Deploy/job_heartbeat.py
+  M  supply_chain_crawler.py  ← Product/Git_Deploy/supply_chain_crawler.py
+  M  web/lib/params.ts        ← Product/Git_Deploy/web/lib/params.ts
+  M  web/app/page.tsx         ← Product/Git_Deploy/web/app/page.tsx
+  M  CLAUDE.md                ← <project root>/CLAUDE.md
+  M  BACKLOG.md               ← <project root>/BACKLOG.md
+(supplemental, NOT uploaded: Product/next_rebuild/tests/health.test.ts, Product/tests/test_source_runs.py)
+```
+Prod check after deploy: open `/?tab=health` — every row mapped (no bare `table[key]` labels), job table
+matches `/health` → `jobs`.
 
 ---
 
@@ -39,7 +357,7 @@ Decisions: D-1…D-8 (2026-11-09); **cutover signed off by Simpo 2026-11-16** (N
 | 0–3 | done (84/84, 0 browser diffs — 2026-11-09) |
 | WEB-01a/b/c + Overview NULL fix | **in prod** — GitHub `main@0d1ae85` (2026-11-15); `POST /api/run-crawl` → 401 unkeyed, confirmed 2026-11-16 |
 | 4 — cutover | **in prod** 2026-11-16 (Dockerfile build — §9 WEB-01e/f). Post-deploy checks 1–4 passed (build, boot line, /health + tabs + auth + exports, ⚡ + ⬇️ by Simpo). **Open: check 5** (scheduled backup — blocked on RE-05 Full Disk Access) and **check 6** (Railway memory) |
-| 5 — retirement | **prepared + verified locally 2026-11-16, ready to upload** (manifest below). Do NOT upload until Phase 4 check 5 passes — Phase 5 removes the `SEMI_UI=classic` rollback |
+| 5 — retirement | **in prod since 2026-11-16** — found 2026-11-22 via git (GIT-01): `main` has `api_server.py`, the Phase 5 `startup.sh`/`requirements.txt`/`Dockerfile`, and deleted `dashboard.py` (`92e22f4`) + `assets/responsive.css` (`8d95baf`); head `60318b0`. The `SEMI_UI=classic` rollback no longer exists in prod; rollback = archive (below) |
 
 ### Phase 4 — upload gate + post-deploy checks (Simpo)
 **Do not upload until** the backup agent has produced two scheduled `.db.gz` (RE-03 / §9 RE-05:
@@ -56,7 +374,7 @@ grant `/bin/bash` Full Disk Access first). Then upload the 2026-11-16 manifest a
 restore the pre-cutover `startup.sh` (`archive/_to_delete/…` not needed — the classic branch is the
 old line verbatim) and restore the pre-cutover `Dockerfile` (single `python:3.11-slim` stage) + delete `web/` **in GitHub** (`D`).
 
-### Phase 5 — retirement (done locally 2026-11-16; NOT in prod)
+### Phase 5 — retirement (done 2026-11-16; IN PROD since 2026-11-16 15:24 HKT, `main@60318b0` — corrected 2026-11-22, GIT-01)
 What changed: `api_server.py` (Flask only) holds every route, extracted verbatim from `dashboard.py`
 with the helpers the routes use; `startup.sh` runs `gunicorn api_server:server` internally and has
 **no classic branch** (missing node/web build or `PORT=8051` → exit 1); `requirements.txt` drops
@@ -75,7 +393,7 @@ exits 1 with no web build / on PORT=8051, clean SIGTERM teardown.
 Intentional behaviour differences: GET `/api/run-crawl` → 405 (was Dash's catch-all 200 page —
 neither starts a crawl); the bundle README's local-run hint names `api_server.py`.
 
-**Upload gate:** Phase 4 check 5 (a scheduled `backup_local.sh` `.db.gz` from launchd). Then upload
+**(Historical — this gate was bypassed; Phase 5 shipped 2026-11-16.) Upload gate:** Phase 4 check 5 (a scheduled `backup_local.sh` `.db.gz` from launchd). Then upload
 the 2026-11-16 Phase 5 manifest and check: build log `pip install` has no dash/plotly; boot line
 `=== UI: next (public :PORT) -> API: gunicorn api_server (internal http://127.0.0.1:8051) ===`;
 `/health`, tabs, ⚡, ⬇️ as in Phase 4; Railway memory drops (no Dash/Plotly in the 2 workers).
@@ -113,7 +431,7 @@ Code and docs are done on disk. These three cannot be done by an agent:
 1. **Reload the launchd backup agent.** It has been exec'ing a path that no longer exists
    since the reorg, so the ONLY backup (Hobby plan, `CLAUDE.md §5.2`) has produced nothing.
    ```bash
-   cd "/Users/simpochiu/Documents/Claude - Industry Data Pj"
+   cd "/Users/simpochiu/Projects/Invest-Industry Data Pj"
    launchctl unload ~/Library/LaunchAgents/com.simpo.semibackup.plist 2>/dev/null
    cp Product/local/com.simpo.semibackup.plist ~/Library/LaunchAgents/
    launchctl load  ~/Library/LaunchAgents/com.simpo.semibackup.plist
@@ -1859,7 +2177,7 @@ The volume guard, `volume_ok` reporting, and `backup_local.sh` are implemented (
 3. **Cron the off-platform backup:**
    ```bash
    crontab -e
-   0 9 * * 0 cd "/Users/simpochiu/Documents/Claude - Industry Data Pj" && mkdir -p backups && ./backup_local.sh >> backups/backup.log 2>&1
+   0 9 * * 0 cd "/Users/simpochiu/Projects/Invest-Industry Data Pj" && mkdir -p backups && ./backup_local.sh >> backups/backup.log 2>&1
    ```
    (`mkdir -p backups` is load-bearing — see the 2026-08-02 note above. macOS also needs
    Full Disk Access granted to cron or this fails silently every week.)

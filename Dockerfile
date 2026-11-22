@@ -28,7 +28,8 @@ RUN python3 export_web_config.py \
     && cd web \
     && npm ci --ignore-scripts --no-audit --no-fund \
     && npm run build \
-    && cp -r .next/static .next/standalone/.next/static
+    && cp -r .next/static .next/standalone/.next/static \
+    && cp -r public .next/standalone/public
 
 # ── Stage 2: runtime (Python app + node + built UI) ─────────────────────────
 FROM python:3.11-slim

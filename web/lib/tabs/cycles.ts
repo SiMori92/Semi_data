@@ -109,7 +109,7 @@ export function buildCycles(db: Db, clock: Clock, tickers: readonly string[], se
     html.Div([
       html.Label("Select ticker:", { style: { color: SUBTEXT, fontSize: "12px", marginRight: "8px" } }),
       dcc.Dropdown({ id: "cycles-ticker-select", className: "cycle-ticker-select", options: tickers.map((t) => ({ label: t, value: t })),
-        value, clearable: false, style: { width: "200px", display: "inline-block", backgroundColor: BG3, color: TEXT, border: "1px solid #30363d" } }),
+        value, clearable: false, style: { width: "200px", display: "inline-block", backgroundColor: BG3, color: TEXT, border: "1px solid var(--line)" } }),
     ], { style: { marginBottom: "10px" } }),
     html.Div([
       html.Span("🟢 Green shading = up cycle  ", { style: { color: GREEN, fontSize: "12px" } }),

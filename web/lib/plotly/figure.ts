@@ -63,7 +63,7 @@ const rangeselectorButtons = (): Json => ({
     { count: 3, label: "3Y", step: "year", stepmode: "backward" },
     { count: 5, label: "5Y", step: "year", stepmode: "backward" },
   ],
-  activecolor: ACCENT, bgcolor: BG2, bordercolor: "#30363d", borderwidth: 1,
+  activecolor: "var(--accent-soft)", bgcolor: BG2, bordercolor: "var(--line)", borderwidth: 1,
   font: { color: TEXT, size: 11 },
   x: 0, xanchor: "left", y: 1.03, yanchor: "bottom",
 });
@@ -84,7 +84,7 @@ export function withRangeSelector(
   if (opts.legendBottom ?? true) {
     upd.margin = { l: 60, r: 25, t: 95, b: 95 };
     upd.legend = { orientation: "h", yanchor: "top", y: -0.18, xanchor: "left", x: 0,
-      font: { color: TEXT, size: 10 }, bgcolor: "rgba(0,0,0,0)", bordercolor: "#30363d" };
+      font: { color: TEXT, size: 10 }, bgcolor: "rgba(0,0,0,0)", bordercolor: "var(--line)" };
   } else {
     upd.margin = { l: 60, r: 25, t: 95, b: 55 };
   }
@@ -131,7 +131,7 @@ export function addSeries(fig: Figure, s: Series, exempt?: "single-point"): Figu
     return fig;
   }
   if (s.provenance === "modeled") {
-    const color = String((s.trace.line as Record<string, Json> | undefined)?.color ?? (s.trace.marker as Record<string, Json> | undefined)?.color ?? "#888");
+    const color = String((s.trace.line as Record<string, Json> | undefined)?.color ?? (s.trace.marker as Record<string, Json> | undefined)?.color ?? "#688396");
     const name = String(s.trace.name ?? "");
     fig.data.push({ ...s.trace, ...traceStyle(true, color),
                     name: name.endsWith(MODELED_SUFFIX) ? name : name + MODELED_SUFFIX });
