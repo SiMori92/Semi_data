@@ -1,16 +1,23 @@
 # Header artwork
 
-The shared header selects a painting on each dashboard tab visit, refresh, or return via the browser's back/forward cache. A shuffled bag in sessionStorage shows all four works before starting another cycle and avoids an immediate repeat between cycles. Normal polling and filter changes do not reshuffle. When browser storage is blocked, an in-memory bag supports navigation; reload history cannot be retained in that case.
+The shared header selects a painting on each dashboard tab visit, refresh, or return via the browser's back/forward cache. A shuffled bag in sessionStorage shows every catalogued work once before starting another cycle and avoids an immediate repeat between cycles. Normal polling and filter changes do not reshuffle. When browser storage is blocked, an in-memory bag supports navigation; reload history cannot be retained in that case.
 
-Google Arts & Culture is the discovery/reference source. Captions link to the matching artwork there. Public-domain image copies are stored locally, so rendering does not call Google, Wikimedia, or museum APIs. The selection is curated, not a live feed of the entire Google Arts & Culture collection.
+## Catalogue (UI-02)
 
-| Local file                          | Work                                                                   | Google Arts & Culture                                  | Image source / rights                                                                                                                                                  |
-| ----------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `monet-water-lilies.jpg`            | Claude Monet, _Water Lilies_, 1906                                     | https://artsandculture.google.com/asset/XwEbNDsEYukiWQ | https://commons.wikimedia.org/wiki/File:Claude_Monet_-_Water_Lilies_-_1906,_Ryerson.jpg · Public domain; Art Institute of Chicago artwork 16568                        |
-| `monet-japanese-footbridge.jpg`     | Claude Monet, _The Japanese Footbridge_, 1899                          | https://artsandculture.google.com/asset/RgG90GYz4QkZ4A | https://commons.wikimedia.org/wiki/File:Claude_Monet,_The_Japanese_Footbridge,_1899,_NGA_74796.jpg · CC0; National Gallery of Art                                      |
-| `caillebotte-paris-rainy-day.jpg`   | Gustave Caillebotte, _Paris Street; Rainy Day_, 1877                   | https://artsandculture.google.com/asset/5wEUCOlEf-EaVQ | https://commons.wikimedia.org/wiki/File:Gustave_Caillebotte_-_Paris_Street;_Rainy_Day_-_Google_Art_Project.jpg · Public domain; Art Institute of Chicago artwork 20684 |
-| `pissarro-boulevard-montmartre.jpg` | Camille Pissarro, _The Boulevard Montmartre on a Winter Morning_, 1897 | https://artsandculture.google.com/asset/4wGJB3rAyAmk2w | https://commons.wikimedia.org/wiki/File:The_Boulevard_Montmartre_on_a_Winter_Morning_MET_DT1906.jpg · CC0; Metropolitan Museum of Art                                  |
+The collection is a URL catalogue of 100+ public-domain Impressionist and Post-Impressionist works in `web/lib/artwork-catalog.json`, generated from the **Google Art Project** scans on Wikimedia Commons (`Category:Google Art Project works by <artist>`) by `Product/next_rebuild/scripts/build-art-catalog.mjs`. Never hand-edit the JSON; re-run the script and review the diff.
 
-Museum public-domain status for the Chicago works was verified through `https://api.artic.edu/api/v1/artworks/{id}?fields=id,title,is_public_domain`. Footbridge and Montmartre image licenses were verified using Wikimedia Commons image metadata (`LicenseShortName: CC0`). Images are resized to a maximum edge of 1200 pixels and cropped by CSS for the decorative header.
+Each entry records artist, title, year, a 1280 px Commons thumbnail URL (`image`), the matching Google Arts & Culture asset (`source`, taken from the file's Credit line), the Commons file page (`commons`) and its licence. The script keeps a work only when Commons marks it not copyrighted (PD / CC0), it carries a Google Arts & Culture asset id, a title and year parse, its original is at least 1280 px wide, and it is landscape (width/height ≥ 1.15) so the wide header crop works.
 
-To expand the collection, add a local image with verified reuse rights and an entry in `lib/artwork.ts`. The app-specific storage key is `semi-artwork-shuffle-v1`. Bump `artworkStorageKey` when changing the catalog so an existing session starts with a fresh bag.
+Images are loaded by the browser from Wikimedia's CDN (`upload.wikimedia.org` / `thumb.wikimedia.org`); the app server never fetches them. Google Arts & Culture is the discovery/reference destination that captions link to, not a live image feed.
+
+## Local fallback
+
+Only one image is stored here, used when the selected remote image fails to load (offline, blocked host):
+
+| Local file                        | Work                                                 | Google Arts & Culture                                  | Image source / rights                                                                                                                                                  |
+| --------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `caillebotte-paris-rainy-day.jpg` | Gustave Caillebotte, _Paris Street; Rainy Day_, 1877 | https://artsandculture.google.com/asset/5wEUCOlEf-EaVQ | https://commons.wikimedia.org/wiki/File:Gustave_Caillebotte_-_Paris_Street;_Rainy_Day_-_Google_Art_Project.jpg · Public domain; Art Institute of Chicago artwork 20684 |
+
+If the fallback also fails, the header shows "Artwork unavailable" with no caption.
+
+The app-specific storage key is `semi-artwork-shuffle-v2`. Bump `artworkStorageKey` in `web/lib/artwork.ts` whenever the catalogue changes so existing sessions start a fresh bag.

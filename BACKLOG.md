@@ -34,7 +34,14 @@ into the Claude project's Instructions field**, §12.2).
 
 **First git deploy APPROVED by Simpo 2026-11-22** (commit + push; `.env.example` left out by choice):
 one commit of the UI-01 + DH-01 set + `.gitignore` + the 4 `git rm` deletions + root docs → `main`.
-The pushed SHA and post-deploy checks are recorded in the next local edit of this file.
+**Pushed 2026-11-22 20:52 HKT: `main@4ff2c6f`** (52 files: 30 M, 18 A, 4 D). Live ~2 min later.
+Post-deploy (agent, read-only): `/health` ok (`volume_ok`, `crawl_ok`, scheduler on); all 7 tabs 200;
+4 artwork JPEGs 200; no Bootstrap request; 16/16 browser checks on the live site (skip link, sidebar
+222/60 px, page scroll, filters, rail names, no page errors); light + dark screenshots reviewed.
+Not exercised on prod (would write or trigger work): ⚡ Run crawl, ⬇️ export bundle — click once.
+Open: Railway CLI token expired (`railway login` needed for build logs); `crawl_source_runs` fills on
+the next weekly supply_chain run (~2026-11-23 14:33 HKT) — check the Data Health scraper table then.
+This BACKLOG edit is local; it ships with the next approved commit.
 
 ---
 
@@ -53,7 +60,7 @@ Evidence `[Data Last Crawled/Updated: 2026-11-08 22:07 UTC]`: `/health` → `sch
 
 ---
 
-## UI-01 — UI refresh to the UI Handbook (P2, opened 2026-11-22) — **Phases 0–5 DONE locally 2026-11-22; READY TO UPLOAD**
+## UI-01 — UI refresh to the UI Handbook (P2, opened 2026-11-22) — **DEPLOYED 2026-11-22 (`main@4ff2c6f`)**
 
 Plan: `Product/docs/UI_REFRESH_PLAN.md` (decisions D1–D6 recorded there: light + dark option, sidebar nav,
 artwork headers, lucide-react, Next 16.4.5, data-only parity). Handbook copied to `Product/docs/UI_HANDBOOK.md`.
@@ -290,6 +297,64 @@ Post-upload checks (Simpo): Railway build + boot/health pass; all 7 tabs render;
 200; theme persists across reload; filters and comparison work; keyboard sub-tabs/sort work; Run
 crawl reports the real server result and Download data returns the export bundle. Verify volume
 and scheduler health separately. This local UI QA did not run a live crawl or a production export.
+
+---
+
+## UI-02 — Rotating header artwork: 100+ Google Art Project works (P2, opened 2026-11-22) — **CODE DONE locally 2026-11-22; READY TO COMMIT (approval pending, §5.0)**
+
+Simpo's updated `Product/docs/UI_HANDBOOK.md` (Artwork system section) replaces the 4 locally-stored
+paintings with a URL catalogue of **no fewer than 100** public-domain works extracted from the Google
+Art Project scans on Wikimedia Commons. Implemented as built:
+
+- **Generator (supplemental, does not ship):** `Product/next_rebuild/scripts/build-art-catalog.mjs`.
+  Crawls Commons `Category:Google Art Project works by <artist>` for 20 Impressionist/Post-Impressionist
+  artists. Keeps a work only when: Commons marks it not copyrighted (PD/CC0) · it carries a Google
+  Arts & Culture asset id (from the file's Credit line) · title and year parse · original ≥1280 px wide ·
+  landscape (w/h ≥ 1.15) for the wide header crop. Strips trailing years from titles (year is its own
+  field). **Refuses to write fewer than 100 works.** Result: **182 works, 20 artists** →
+  `web/lib/artwork-catalog.json` (**generated — never hand-edit**; re-run the script and review the diff).
+- `web/lib/artwork.ts`: imports the catalogue JSON; shuffle/validation unchanged except an `idSet` and
+  the storage key bump **`semi-artwork-shuffle-v1` → `v2`** (fresh bag for existing sessions).
+  New exported `fallbackArtwork` = the one local image (Caillebotte, _Paris Street; Rainy Day_).
+- `web/components/ArtworkHeader.tsx`: failed remote load → preload the local fallback before showing its
+  caption; if that also fails → neutral "Artwork unavailable", no mismatched caption (UI-01 QA rule).
+- `web/public/art/`: **exactly one local fallback kept** (`caillebotte-paris-rainy-day.jpg`, already in
+  `main@4ff2c6f`); the other three jpgs deleted (`git rm` in the approved commit). README rewritten.
+- Images load **in the browser** from Wikimedia's CDN (1280 px thumbnails); the app server never fetches
+  them. Captions link to the matching Google Arts & Culture asset (`source`), with `commons` + `license`
+  recorded per entry. Bag/reload/Back-Forward behaviour unchanged: reshuffle per tab visit/reload only,
+  never per filter or status poll.
+- Docs already updated: `CLAUDE.md` (§2.1 artwork row, §6.2 shuffle-key note), `UI_HANDBOOK.md`,
+  `web/public/art/README.md`. To expand: add the artist to `ARTISTS` in the generator, re-run, bump the
+  storage key, review crops, run the artwork tests (handbook §Artwork system).
+
+Verified 2026-11-22 on the final files: `npx vitest run` **184/184** (incl. `tests/artwork.test.ts`),
+`npm run stage` OK, `qa-phase5.cjs` **41/41** acceptance checks — incl. complete bag/reload boundary,
+browser Back/Forward visits, corrupt + blocked sessionStorage, selected-image-fails → fallback painting
+and caption agree, all-loads-fail → neutral unavailable text. Report:
+`Product/next_rebuild/screens/ui01-phase5/acceptance.json`.
+
+Commit manifest (from `Product/Git_Deploy/`, on approval — §5.0):
+```
+  A  web/lib/artwork-catalog.json        ← generated catalogue, 182 works
+  M  web/lib/artwork.ts
+  M  web/components/ArtworkHeader.tsx
+  M  web/public/art/README.md
+  D  web/public/art/monet-japanese-footbridge.jpg
+  D  web/public/art/monet-water-lilies.jpg
+  D  web/public/art/pissarro-boulevard-montmartre.jpg
+  M  CLAUDE.md  BACKLOG.md               ← project root, via git_stage_root_docs.sh
+```
+Supplemental (NOT shipped): `build-art-catalog.mjs`, `tests/artwork.test.ts`, `qa-phase5.cjs`,
+`acceptance.json`, `Product/docs/UI_HANDBOOK.md`.
+
+**Pre-existing gap found:** `.env.example` is in the deploy set (§2.1) but was never committed — absent
+from `origin/main`, untracked locally, not gitignored, placeholders only (no secrets). Proposed as an
+extra `A .env.example` in the same commit; Simpo to confirm or defer.
+
+Prod check after push: Railway build OK; header painting rotates across tab visits/reloads; caption
+links open the Google Arts & Culture asset; with the network blocked the Caillebotte fallback renders
+with its matching caption.
 
 ---
 

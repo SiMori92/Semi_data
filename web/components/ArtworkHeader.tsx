@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { artworks, createArtworkShuffler, type Artwork } from "@/lib/artwork";
+import { createArtworkShuffler, fallbackArtwork, type Artwork } from "@/lib/artwork";
 
 const nextArtwork = createArtworkShuffler();
 
@@ -28,7 +28,7 @@ export function ArtworkHeader({ visitKey }: { visitKey: string }) {
         image.onload = () => { if (!disposed) setArtwork(candidate); };
         image.onerror = () => {
           if (disposed) return;
-          if (!fallback && candidate !== artworks[0]) load(artworks[0], true);
+          if (!fallback) load(fallbackArtwork, true);
           else { setArtwork(null); setUnavailable(true); }
         };
         image.src = candidate.image;
